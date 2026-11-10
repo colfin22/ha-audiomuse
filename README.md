@@ -38,7 +38,15 @@ A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/Au
 
 ## Installation
 
-### HACS (recommended)
+### Marketplace (Home Assistant 2026.11 and newer)
+
+Since 2026.11, HACS is built into Home Assistant as the **Marketplace**.
+
+1. Go to **Settings → Marketplace**.
+2. In the upper-right corner, select **Add from link**, enter `https://github.com/colfin22/ha-audiomuse` and select **Add**. The Marketplace asks you to connect GitHub the first time.
+3. Install **AudioMuse-AI**, then restart Home Assistant.
+
+### HACS (Home Assistant 2026.10 and older)
 
 1. In HACS, open the ⋮ menu → **Custom repositories**.
 2. Add `https://github.com/colfin22/ha-audiomuse` with the type **Integration**.
