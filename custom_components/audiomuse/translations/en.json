@@ -175,7 +175,7 @@
         },
         "name": {
           "name": "Playlist name",
-          "description": "Defaults to \"<artist> and similar\". AudioMuse-AI adds \"_instant\"."
+          "description": "Defaults to \"[artist] and similar\". AudioMuse-AI adds \"_instant\"."
         },
         "save": {
           "name": "Save playlist",

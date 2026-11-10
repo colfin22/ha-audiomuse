@@ -148,7 +148,7 @@ npm ci
 npm run build   # type-check and bundle
 ```
 
-Tests run with `pytest`. `pip install -r tests/requirements.txt` is enough for the client tests; add `pytest-homeassistant-custom-component` to run the Home Assistant tests too.
+Tests run with `pytest`. `pip install -r tests/requirements.txt` is enough for the client tests; add `pytest-homeassistant-custom-component` and the `home-assistant-frontend` version its Home Assistant pins to run the Home Assistant tests too (see `.github/workflows/tests.yml`).
 
 ## Licence
 
