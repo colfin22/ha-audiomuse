@@ -2,9 +2,11 @@
 
 A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI). It brings AudioMuse-AI's sonic-analysis playlists into Home Assistant and plays them on your speakers through [Music Assistant](https://www.music-assistant.io/).
 
-> **Status: early development (0.1.0).** The actions and sensors below work; the AudioMuse page for the Home Assistant sidebar is the next step.
+> **Status: early development (0.1.0).** The AudioMuse sidebar page (make a playlist, playlist ideas), the actions and the sensors work. Similar artists, Radios and recent playlists on the page are next.
 
 ## What it does
+
+Installing the integration adds an **AudioMuse** page to the Home Assistant sidebar: describe a playlist or tap one of AudioMuse-AI's ideas, see the songs it picked, then save the playlist to your music server or save and play it on a Music Assistant speaker. Everything on the page is also available as an action.
 
 - **Instant Playlist:** describe what you want ("upbeat 90s indie for a Sunday morning"). AudioMuse-AI's AI picks songs from *your* library and saves them as a playlist on your music server, so it shows up in every client app. It can also start it on a speaker straight away.
 - **Similar artists:** find artists in your library that sound like one you name.
@@ -72,6 +74,18 @@ Music Assistant has its own AudioMuse-AI plugin (similar tracks, an "Inspired by
 ## Notes
 
 - The integration never changes AudioMuse-AI's settings.
+
+## Development
+
+The sidebar page is written in TypeScript with [Lit](https://lit.dev) and bundled into `custom_components/audiomuse/frontend/audiomuse-panel.js`, which is committed so HACS users need no build step.
+
+```bash
+cd frontend
+npm ci
+npm run build   # type-check and bundle
+```
+
+Tests: `pip install -r tests/requirements.txt` runs the client tests; install `pytest-homeassistant-custom-component` as well to run the Home Assistant tests (`pytest`).
 
 ## Licence
 

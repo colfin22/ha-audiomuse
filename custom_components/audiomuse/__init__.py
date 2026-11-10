@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_API_TOKEN, CONF_URL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
@@ -14,7 +14,9 @@ from homeassistant.helpers.typing import ConfigType
 from .api import AudioMuseClient
 from .const import DOMAIN
 from .coordinator import AudioMuseCoordinator
+from .panel import async_register_panel, async_unregister_panel
 from .services import async_setup_services
+from .websocket_api import async_register_websocket_commands
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -33,8 +35,9 @@ type AudioMuseConfigEntry = ConfigEntry[AudioMuseRuntimeData]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the integration's actions once, for every config entry."""
+    """Register the integration's actions and page commands once, for every config entry."""
     async_setup_services(hass)
+    async_register_websocket_commands(hass)
     return True
 
 
@@ -49,12 +52,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: AudioMuseConfigEntry) ->
     entry.runtime_data = AudioMuseRuntimeData(client=client, coordinator=coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
+    await async_register_panel(hass)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: AudioMuseConfigEntry) -> bool:
-    """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload a config entry; remove the page when no AudioMuse-AI server is left."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded and not any(
+        e.state is ConfigEntryState.LOADED
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.entry_id != entry.entry_id
+    ):
+        async_unregister_panel(hass)
+    return unloaded
 
 
 async def _async_reload_on_options_change(hass: HomeAssistant, entry: AudioMuseConfigEntry) -> None:

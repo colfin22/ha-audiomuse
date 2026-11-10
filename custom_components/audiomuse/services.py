@@ -22,7 +22,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 
-from .api import AudioMuseError, Track
+from .api import AudioMuseError, InstantPlaylist
 from .const import (
     ATTR_ARTIST,
     ATTR_CONFIG_ENTRY_ID,
@@ -109,19 +109,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     async def instant_playlist(call: ServiceCall) -> ServiceResponse:
         entry = _get_entry(hass, call)
-        opts = entry.options
         prompt: str = call.data[ATTR_PROMPT]
-        count = call.data.get(ATTR_COUNT) or int(opts.get(CONF_DEFAULT_COUNT, DEFAULT_COUNT))
-        try:
-            result = await entry.runtime_data.client.instant_playlist(
-                prompt,
-                count,
-                ai_provider=opts.get(CONF_AI_PROVIDER),
-                ai_model=opts.get(CONF_AI_MODEL),
-                ai_server_url=opts.get(CONF_AI_SERVER_URL),
-            )
-        except AudioMuseError as err:
-            raise HomeAssistantError(f"Instant Playlist failed: {err}") from err
+        result = await async_make_instant(entry, prompt, call.data.get(ATTR_COUNT))
         response: dict[str, Any] = {
             "tracks": [t.as_dict() for t in result.tracks],
             "ai_provider": result.ai_provider,
@@ -129,7 +118,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
             "message": result.message,
         }
         name = call.data.get(ATTR_NAME) or playlist_name_from(prompt)
-        response.update(await _save_and_play(hass, entry, call, name, result.tracks))
+        response.update(
+            await async_save_and_play(
+                hass, entry, name, [t.item_id for t in result.tracks],
+                save=call.data.get(ATTR_SAVE, True), play_on=call.data.get(ATTR_PLAY_ON),
+            )
+        )
         return response
 
     async def similar_artists(call: ServiceCall) -> ServiceResponse:
@@ -146,7 +140,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         entry = _get_entry(hass, call)
         client = entry.runtime_data.client
         artist: str = call.data[ATTR_ARTIST]
-        count = call.data.get(ATTR_COUNT) or int(entry.options.get(CONF_DEFAULT_COUNT, DEFAULT_COUNT))
+        count = call.data.get(ATTR_COUNT) or default_count(entry)
         try:
             names = [artist]
             if call.data[ATTR_INCLUDE_SIMILAR]:
@@ -165,7 +159,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
             "tracks": [t.as_dict() for t in tracks],
         }
         name = call.data.get(ATTR_NAME) or f"{artist} and similar"
-        response.update(await _save_and_play(hass, entry, call, name, tracks))
+        response.update(
+            await async_save_and_play(
+                hass, entry, name, [t.item_id for t in tracks],
+                save=call.data.get(ATTR_SAVE, True), play_on=call.data.get(ATTR_PLAY_ON),
+            )
+        )
         return response
 
     async def playlist_ideas(call: ServiceCall) -> ServiceResponse:
@@ -212,20 +211,46 @@ def async_setup_services(hass: HomeAssistant) -> None:
     )
 
 
-async def _save_and_play(
+def default_count(entry: AudioMuseConfigEntry) -> int:
+    """Songs per playlist from the options."""
+    return int(entry.options.get(CONF_DEFAULT_COUNT, DEFAULT_COUNT))
+
+
+async def async_make_instant(
+    entry: AudioMuseConfigEntry, prompt: str, count: int | None = None
+) -> InstantPlaylist:
+    """Ask AudioMuse-AI for an Instant Playlist using the entry's AI options."""
+    opts = entry.options
+    try:
+        return await entry.runtime_data.client.instant_playlist(
+            prompt,
+            count or default_count(entry),
+            ai_provider=opts.get(CONF_AI_PROVIDER),
+            ai_model=opts.get(CONF_AI_MODEL),
+            ai_server_url=opts.get(CONF_AI_SERVER_URL),
+        )
+    except AudioMuseError as err:
+        raise HomeAssistantError(f"Instant Playlist failed: {err}") from err
+
+
+async def async_save_and_play(
     hass: HomeAssistant,
     entry: AudioMuseConfigEntry,
-    call: ServiceCall,
     name: str,
-    tracks: list[Track],
+    item_ids: list[str],
+    *,
+    save: bool = True,
+    play_on: str | None = None,
 ) -> dict[str, Any]:
-    """Save the tracks as a playlist and optionally start it on a player."""
+    """Save songs as a music-server playlist and optionally start it on a player.
+
+    Playing needs a saved playlist, so play_on implies saving.
+    """
     out: dict[str, Any] = {"playlist_id": None, "playlist_name": None, "played_on": None}
-    play_on = call.data.get(ATTR_PLAY_ON)
-    if not call.data.get(ATTR_SAVE, True) and not play_on:
+    if not save and not play_on:
         return out
     try:
-        saved = await entry.runtime_data.client.save_playlist(name, [t.item_id for t in tracks])
+        saved = await entry.runtime_data.client.save_playlist(name, item_ids)
     except AudioMuseError as err:
         raise HomeAssistantError(f"Saving the playlist failed: {err}") from err
     out["playlist_id"] = saved.playlist_id

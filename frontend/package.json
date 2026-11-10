@@ -1,0 +1,18 @@
+{
+  "name": "ha-audiomuse-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sidebar page for the AudioMuse-AI Home Assistant integration",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && esbuild src/audiomuse-panel.ts --bundle --format=esm --minify --target=es2021 --legal-comments=none --outfile=../custom_components/audiomuse/frontend/audiomuse-panel.js",
+    "watch": "esbuild src/audiomuse-panel.ts --bundle --format=esm --target=es2021 --outfile=../custom_components/audiomuse/frontend/audiomuse-panel.js --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "lit": "^3.3.3"
+  }
+}
