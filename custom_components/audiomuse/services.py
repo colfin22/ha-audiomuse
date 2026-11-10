@@ -22,7 +22,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 
-from .api import AudioMuseError, InstantPlaylist
+from .api import AudioMuseError, InstantPlaylist, Track
 from .const import (
     ATTR_ARTIST,
     ATTR_CONFIG_ENTRY_ID,
@@ -53,6 +53,7 @@ from .const import (
     SERVICE_SIMILAR_ARTISTS,
 )
 from .playlist import mix_tracks, playlist_name_from
+from .recent import get_recent
 
 if TYPE_CHECKING:
     from . import AudioMuseConfigEntry
@@ -122,6 +123,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             await async_save_and_play(
                 hass, entry, name, [t.item_id for t in result.tracks],
                 save=call.data.get(ATTR_SAVE, True), play_on=call.data.get(ATTR_PLAY_ON),
+                source="instant", detail=prompt,
             )
         )
         return response
@@ -138,22 +140,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     async def artist_playlist(call: ServiceCall) -> ServiceResponse:
         entry = _get_entry(hass, call)
-        client = entry.runtime_data.client
         artist: str = call.data[ATTR_ARTIST]
-        count = call.data.get(ATTR_COUNT) or default_count(entry)
-        try:
-            names = [artist]
-            if call.data[ATTR_INCLUDE_SIMILAR]:
-                similar = await client.similar_artists(
-                    artist=artist, count=call.data[ATTR_INCLUDE_SIMILAR]
-                )
-                names += [a.name for a in similar if a.name and a.name.lower() != artist.lower()]
-            pools = [await client.artist_tracks(artist=n) for n in names]
-        except AudioMuseError as err:
-            raise HomeAssistantError(f"Artist playlist failed: {err}") from err
-        tracks = mix_tracks(pools, count)
-        if not tracks:
-            raise HomeAssistantError(f"No analysed tracks found for {artist}")
+        names, tracks = await async_make_artist_mix(
+            entry, artist, call.data[ATTR_INCLUDE_SIMILAR], call.data.get(ATTR_COUNT)
+        )
         response: dict[str, Any] = {
             "artists": names,
             "tracks": [t.as_dict() for t in tracks],
@@ -163,6 +153,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             await async_save_and_play(
                 hass, entry, name, [t.item_id for t in tracks],
                 save=call.data.get(ATTR_SAVE, True), play_on=call.data.get(ATTR_PLAY_ON),
+                source="artist", detail=artist,
             )
         )
         return response
@@ -233,6 +224,25 @@ async def async_make_instant(
         raise HomeAssistantError(f"Instant Playlist failed: {err}") from err
 
 
+async def async_make_artist_mix(
+    entry: AudioMuseConfigEntry, artist: str, include_similar: int, count: int | None = None
+) -> tuple[list[str], list[Track]]:
+    """Tracks from an artist plus the artists that sound most like them, interleaved."""
+    client = entry.runtime_data.client
+    try:
+        names = [artist]
+        if include_similar:
+            similar = await client.similar_artists(artist=artist, count=include_similar)
+            names += [a.name for a in similar if a.name and a.name.lower() != artist.lower()]
+        pools = [await client.artist_tracks(artist=n) for n in names]
+    except AudioMuseError as err:
+        raise HomeAssistantError(f"Artist playlist failed: {err}") from err
+    tracks = mix_tracks(pools, count or default_count(entry))
+    if not tracks:
+        raise HomeAssistantError(f"No analysed tracks found for {artist}")
+    return names, tracks
+
+
 async def async_save_and_play(
     hass: HomeAssistant,
     entry: AudioMuseConfigEntry,
@@ -241,6 +251,8 @@ async def async_save_and_play(
     *,
     save: bool = True,
     play_on: str | None = None,
+    source: str = "page",
+    detail: str | None = None,
 ) -> dict[str, Any]:
     """Save songs as a music-server playlist and optionally start it on a player.
 
@@ -256,6 +268,15 @@ async def async_save_and_play(
     out["playlist_id"] = saved.playlist_id
     # AudioMuse-AI (all music-server types, checked on v3.7.1) stores it as "<name>_instant".
     out["playlist_name"] = f"{name.strip()}_instant"
+    if (recent := get_recent(hass)) is not None:
+        recent.add(
+            entry_id=entry.entry_id,
+            playlist_id=saved.playlist_id,
+            playlist_name=out["playlist_name"],
+            source=source,
+            detail=detail,
+            track_count=len(item_ids),
+        )
     if play_on:
         if not saved.playlist_id:
             raise HomeAssistantError(

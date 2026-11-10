@@ -26,7 +26,9 @@ from .const import (
     MIN_COUNT,
     MUSIC_ASSISTANT_DOMAIN,
 )
+from .recent import get_recent
 from .services import (
+    async_make_artist_mix,
     async_make_instant,
     async_play_playlist,
     async_save_and_play,
@@ -43,6 +45,13 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_instant)
     websocket_api.async_register_command(hass, ws_save)
     websocket_api.async_register_command(hass, ws_play)
+    websocket_api.async_register_command(hass, ws_search_artists)
+    websocket_api.async_register_command(hass, ws_similar_artists)
+    websocket_api.async_register_command(hass, ws_artist_mix)
+    websocket_api.async_register_command(hass, ws_radios)
+    websocket_api.async_register_command(hass, ws_run_radios)
+    websocket_api.async_register_command(hass, ws_recent)
+    websocket_api.async_register_command(hass, ws_recent_remove)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -104,6 +113,7 @@ async def ws_info(hass: HomeAssistant, connection, msg) -> None:
             {
                 "entry_id": entry.entry_id,
                 "title": entry.title,
+                "url": entry.runtime_data.client.url,
                 "version": data.version if data else None,
                 "music_server": server.name if server else None,
                 "music_server_type": server.server_type if server else None,
@@ -175,6 +185,8 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "artist"]),
+        vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
 @websocket_api.async_response
@@ -184,7 +196,8 @@ async def ws_save(hass: HomeAssistant, connection, msg) -> None:
     async def go():
         entry = _entry(hass, msg["entry_id"])
         return await async_save_and_play(
-            hass, entry, msg["name"], msg["item_ids"], save=True, play_on=msg.get("play_on")
+            hass, entry, msg["name"], msg["item_ids"], save=True, play_on=msg.get("play_on"),
+            source=msg["source"], detail=msg.get("detail"),
         )
 
     await _run(connection, msg, go())
@@ -208,3 +221,136 @@ async def ws_play(hass: HomeAssistant, connection, msg) -> None:
         return {"played_on": msg["entity_id"]}
 
     await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/search_artists",
+        vol.Required("entry_id"): str,
+        vol.Required("query"): vol.All(cv.string, vol.Length(min=1, max=200)),
+    }
+)
+@websocket_api.async_response
+async def ws_search_artists(hass: HomeAssistant, connection, msg) -> None:
+    """Find analysed artists by name."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            artists = await entry.runtime_data.client.search_artists(msg["query"])
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Artist search failed: {err}") from err
+        return {"artists": [a.as_dict() for a in artists[:25]]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/similar_artists",
+        vol.Required("entry_id"): str,
+        vol.Required("artist"): cv.string,
+        vol.Optional("count", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+    }
+)
+@websocket_api.async_response
+async def ws_similar_artists(hass: HomeAssistant, connection, msg) -> None:
+    """Artists that sound like the given one."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            artists = await entry.runtime_data.client.similar_artists(
+                artist=msg["artist"], count=msg["count"]
+            )
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Similar artists failed: {err}") from err
+        return {"artists": [a.as_dict() for a in artists]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/artist_mix",
+        vol.Required("entry_id"): str,
+        vol.Required("artist"): cv.string,
+        vol.Optional("include_similar", default=4): vol.All(vol.Coerce(int), vol.Range(min=0, max=20)),
+        vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT)),
+    }
+)
+@websocket_api.async_response
+async def ws_artist_mix(hass: HomeAssistant, connection, msg) -> None:
+    """An artist plus similar artists, as songs (saving is a separate step)."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        names, tracks = await async_make_artist_mix(
+            entry, msg["artist"], msg["include_similar"], msg.get("count")
+        )
+        return {"artists": names, "tracks": [t.as_dict() for t in tracks]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "audiomuse/radios", vol.Required("entry_id"): str})
+@websocket_api.async_response
+async def ws_radios(hass: HomeAssistant, connection, msg) -> None:
+    """Saved AudioMuse-AI Radios."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            radios = await entry.runtime_data.client.get_radios()
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Could not load Radios: {err}") from err
+        return {
+            "radios": [
+                {
+                    "id": r.get("id"),
+                    "name": r.get("name"),
+                    "songs": r.get("n_results"),
+                    "enabled": bool(r.get("enabled")),
+                }
+                for r in radios
+            ]
+        }
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "audiomuse/run_radios", vol.Required("entry_id"): str})
+@websocket_api.async_response
+async def ws_run_radios(hass: HomeAssistant, connection, msg) -> None:
+    """Create or refresh one playlist per enabled Radio."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            result = await entry.runtime_data.client.run_radios()
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Could not refresh Radios: {err}") from err
+        return {
+            "message": result.get("message"),
+            "radios_enabled": result.get("radios_enabled"),
+            "playlists_created": result.get("playlists_created"),
+            "failed": list(result.get("failed") or []),
+        }
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "audiomuse/recent", vol.Optional("entry_id"): str})
+@callback
+def ws_recent(hass: HomeAssistant, connection, msg) -> None:
+    """Playlists saved from Home Assistant, newest first."""
+    recent = get_recent(hass)
+    connection.send_result(msg["id"], {"items": recent.items(msg.get("entry_id")) if recent else []})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "audiomuse/recent_remove", vol.Required("item_id"): str})
+@callback
+def ws_recent_remove(hass: HomeAssistant, connection, msg) -> None:
+    """Forget one recent item (the playlist stays on the music server)."""
+    recent = get_recent(hass)
+    connection.send_result(msg["id"], {"removed": bool(recent and recent.remove(msg["item_id"]))})

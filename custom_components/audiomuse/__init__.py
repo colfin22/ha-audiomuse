@@ -15,6 +15,7 @@ from .api import AudioMuseClient
 from .const import DOMAIN
 from .coordinator import AudioMuseCoordinator
 from .panel import async_register_panel, async_unregister_panel
+from .recent import async_setup_recent
 from .services import async_setup_services
 from .websocket_api import async_register_websocket_commands
 
@@ -36,6 +37,7 @@ type AudioMuseConfigEntry = ConfigEntry[AudioMuseRuntimeData]
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the integration's actions and page commands once, for every config entry."""
+    await async_setup_recent(hass)
     async_setup_services(hass)
     async_register_websocket_commands(hass)
     return True

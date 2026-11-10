@@ -9,6 +9,7 @@ import { LitElement, css, html, nothing, type PropertyValues, type TemplateResul
 interface Entry {
   entry_id: string;
   title: string;
+  url: string;
   version: string | null;
   music_server: string | null;
   music_server_type: string | null;
@@ -42,6 +43,39 @@ interface Track {
   album: string | null;
 }
 
+interface Artist {
+  name: string;
+  artist_id: string | null;
+  track_count: number | null;
+  divergence: number | null;
+}
+
+interface Radio {
+  id: number;
+  name: string;
+  songs: number | null;
+  enabled: boolean;
+}
+
+interface RecentItem {
+  id: string;
+  entry_id: string;
+  playlist_id: string | null;
+  playlist_name: string;
+  source: "instant" | "artist" | "page";
+  detail: string | null;
+  track_count: number;
+  created: string;
+}
+
+interface Result {
+  tracks: Track[];
+  model: string | null;
+  source: "instant" | "artist";
+  detail: string;
+  label: string;
+}
+
 interface Saved {
   playlist_id: string | null;
   playlist_name: string | null;
@@ -54,6 +88,7 @@ interface Hass {
 }
 
 type Busy = "" | "make" | "save" | "play";
+const SEARCH_DELAY_MS = 300;
 
 const IDEAS_SHOWN = 12;
 const LS_ENTRY = "audiomuse.entry";
@@ -78,6 +113,28 @@ function shuffled<T>(items: T[]): T[] {
   return out;
 }
 
+/** "1 song", "25 songs", "? songs" when unknown. */
+export function songs(n: number | null | undefined): string {
+  if (n == null) return "? songs";
+  return `${n.toLocaleString()} song${n === 1 ? "" : "s"}`;
+}
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago", else DD-MM-YYYY. */
+export function whenText(iso: string, now = Date.now()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const mins = Math.round((now - t) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  if (days <= 6) return `${days} day${days === 1 ? "" : "s"} ago`;
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
+}
+
 function errorText(err: unknown): string {
   if (err && typeof err === "object" && "message" in err) return String((err as { message: unknown }).message);
   return String(err);
@@ -95,8 +152,21 @@ class AudioMusePanel extends LitElement {
     _nameTouched: { state: true },
     _busy: { state: true },
     _error: { state: true },
-    _tracks: { state: true },
-    _model: { state: true },
+    _result: { state: true },
+    _artistQuery: { state: true },
+    _artistResults: { state: true },
+    _artistSearching: { state: true },
+    _selectedArtist: { state: true },
+    _similar: { state: true },
+    _similarLoading: { state: true },
+    _includeSimilar: { state: true },
+    _artistError: { state: true },
+    _radios: { state: true },
+    _radiosBusy: { state: true },
+    _radiosMsg: { state: true },
+    _radiosError: { state: true },
+    _recent: { state: true },
+    _toastRecent: { state: true },
     _saved: { state: true },
     _player: { state: true },
     _ideas: { state: true },
@@ -115,8 +185,21 @@ class AudioMusePanel extends LitElement {
   declare _nameTouched: boolean;
   declare _busy: Busy;
   declare _error: string;
-  declare _tracks: Track[] | null;
-  declare _model: string | null;
+  declare _result: Result | null;
+  declare _artistQuery: string;
+  declare _artistResults: Artist[];
+  declare _artistSearching: boolean;
+  declare _selectedArtist: string;
+  declare _similar: Artist[] | null;
+  declare _similarLoading: boolean;
+  declare _includeSimilar: number;
+  declare _artistError: string;
+  declare _radios: Radio[] | null;
+  declare _radiosBusy: boolean;
+  declare _radiosMsg: string;
+  declare _radiosError: string;
+  declare _recent: RecentItem[];
+  declare _toastRecent: string;
   declare _saved: Saved | null;
   declare _player: string;
   declare _ideas: string[];
@@ -125,6 +208,8 @@ class AudioMusePanel extends LitElement {
   declare _loadError: string;
 
   private _loading = false;
+  private _searchTimer?: number;
+  private _searchSeq = 0;
 
   constructor() {
     super();
@@ -136,10 +221,23 @@ class AudioMusePanel extends LitElement {
     this._nameTouched = false;
     this._busy = "";
     this._error = "";
-    this._tracks = null;
-    this._model = null;
+    this._result = null;
     this._saved = null;
     this._player = "";
+    this._artistQuery = "";
+    this._artistResults = [];
+    this._artistSearching = false;
+    this._selectedArtist = "";
+    this._similar = null;
+    this._similarLoading = false;
+    this._includeSimilar = 4;
+    this._artistError = "";
+    this._radios = null;
+    this._radiosBusy = false;
+    this._radiosMsg = "";
+    this._radiosError = "";
+    this._recent = [];
+    this._toastRecent = "";
     this._ideas = [];
     this._shownIdeas = [];
     this._ideasError = "";
@@ -190,10 +288,17 @@ class AudioMusePanel extends LitElement {
       (entry.default_player && players.includes(entry.default_player) && entry.default_player) ||
       players[0] ||
       "";
-    this._tracks = null;
+    this._result = null;
     this._saved = null;
     this._error = "";
+    this._artistQuery = "";
+    this._artistResults = [];
+    this._selectedArtist = "";
+    this._similar = null;
+    this._radiosMsg = "";
     void this._loadIdeas();
+    void this._loadRadios();
+    void this._loadRecent();
   }
 
   private async _loadIdeas(): Promise<void> {
@@ -223,7 +328,7 @@ class AudioMusePanel extends LitElement {
     if (!text || !this.hass || this._busy) return;
     this._busy = "make";
     this._error = "";
-    this._tracks = null;
+    this._result = null;
     this._saved = null;
     try {
       const res = await this.hass.callWS<{ tracks: Track[]; ai_model: string | null }>({
@@ -232,8 +337,7 @@ class AudioMusePanel extends LitElement {
         prompt: text,
         count: this._count,
       });
-      this._tracks = res.tracks;
-      this._model = res.ai_model;
+      this._result = { tracks: res.tracks, model: res.ai_model, source: "instant", detail: text, label: "" };
       if (!this._nameTouched) this._name = nameFromPrompt(text);
     } catch (err) {
       this._error = errorText(err);
@@ -243,18 +347,21 @@ class AudioMusePanel extends LitElement {
   }
 
   private async _save(play: boolean): Promise<void> {
-    if (!this.hass || !this._tracks?.length || this._busy) return;
+    if (!this.hass || !this._result?.tracks.length || this._busy) return;
     this._busy = play ? "play" : "save";
     this._error = "";
     try {
       const msg: Record<string, unknown> = {
         type: "audiomuse/save",
         entry_id: this._entryId,
-        name: this._name.trim() || nameFromPrompt(this._prompt),
-        item_ids: this._tracks.map((t) => t.item_id),
+        name: this._name.trim() || nameFromPrompt(this._result.detail),
+        item_ids: this._result.tracks.map((t) => t.item_id),
+        source: this._result.source,
+        detail: this._result.detail,
       };
       if (play && this._player) msg.play_on = this._player;
       this._saved = await this.hass.callWS<Saved>(msg);
+      void this._loadRecent();
     } catch (err) {
       this._error = errorText(err);
     } finally {
@@ -279,6 +386,159 @@ class AudioMusePanel extends LitElement {
     } finally {
       this._busy = "";
     }
+  }
+
+  private _onArtistInput(value: string): void {
+    this._artistQuery = value;
+    window.clearTimeout(this._searchTimer);
+    if (value.trim().length < 2) {
+      this._artistResults = [];
+      this._artistSearching = false;
+      return;
+    }
+    this._searchTimer = window.setTimeout(() => void this._searchArtists(value.trim()), SEARCH_DELAY_MS);
+  }
+
+  private async _searchArtists(query: string): Promise<void> {
+    if (!this.hass) return;
+    const seq = ++this._searchSeq;
+    this._artistSearching = true;
+    this._artistError = "";
+    try {
+      const res = await this.hass.callWS<{ artists: Artist[] }>({
+        type: "audiomuse/search_artists",
+        entry_id: this._entryId,
+        query,
+      });
+      if (seq === this._searchSeq) this._artistResults = res.artists;
+    } catch (err) {
+      if (seq === this._searchSeq) this._artistError = errorText(err);
+    } finally {
+      if (seq === this._searchSeq) this._artistSearching = false;
+    }
+  }
+
+  private async _pickArtist(name: string): Promise<void> {
+    if (!this.hass) return;
+    this._selectedArtist = name;
+    this._artistQuery = name;
+    this._artistResults = [];
+    this._similar = null;
+    this._similarLoading = true;
+    this._artistError = "";
+    try {
+      const res = await this.hass.callWS<{ artists: Artist[] }>({
+        type: "audiomuse/similar_artists",
+        entry_id: this._entryId,
+        artist: name,
+        count: 10,
+      });
+      this._similar = res.artists;
+    } catch (err) {
+      this._artistError = errorText(err);
+    } finally {
+      this._similarLoading = false;
+    }
+  }
+
+  private async _makeArtistMix(): Promise<void> {
+    const artist = this._selectedArtist;
+    if (!this.hass || !artist || this._busy) return;
+    this._busy = "make";
+    this._error = "";
+    this._result = null;
+    this._saved = null;
+    this.shadowRoot?.querySelector(".make")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    try {
+      const res = await this.hass.callWS<{ artists: string[]; tracks: Track[] }>({
+        type: "audiomuse/artist_mix",
+        entry_id: this._entryId,
+        artist,
+        include_similar: this._includeSimilar,
+        count: this._count,
+      });
+      const others = res.artists.length - 1;
+      this._result = {
+        tracks: res.tracks,
+        model: null,
+        source: "artist",
+        detail: artist,
+        label: others > 0 ? `${artist} and ${others} similar artist${others === 1 ? "" : "s"}` : artist,
+      };
+      this._name = others > 0 ? `${artist} and similar` : artist;
+      this._nameTouched = false;
+    } catch (err) {
+      this._error = errorText(err);
+    } finally {
+      this._busy = "";
+    }
+  }
+
+  private async _loadRadios(): Promise<void> {
+    if (!this.hass || !this._entryId) return;
+    try {
+      const res = await this.hass.callWS<{ radios: Radio[] }>({ type: "audiomuse/radios", entry_id: this._entryId });
+      this._radios = res.radios;
+      this._radiosError = "";
+    } catch (err) {
+      this._radiosError = errorText(err);
+    }
+  }
+
+  private async _runRadios(): Promise<void> {
+    if (!this.hass || this._radiosBusy) return;
+    this._radiosBusy = true;
+    this._radiosMsg = "";
+    this._radiosError = "";
+    try {
+      const res = await this.hass.callWS<{ playlists_created: number | null; failed: string[] }>({
+        type: "audiomuse/run_radios",
+        entry_id: this._entryId,
+      });
+      const made = res.playlists_created ?? 0;
+      this._radiosMsg =
+        `Refreshed ${made} Radio playlist${made === 1 ? "" : "s"}.` +
+        (res.failed.length ? ` Failed: ${res.failed.join(", ")}.` : " They keep the Radio's name in your music apps.");
+    } catch (err) {
+      this._radiosError = errorText(err);
+    } finally {
+      this._radiosBusy = false;
+    }
+  }
+
+  private async _loadRecent(): Promise<void> {
+    if (!this.hass || !this._entryId) return;
+    try {
+      const res = await this.hass.callWS<{ items: RecentItem[] }>({ type: "audiomuse/recent", entry_id: this._entryId });
+      this._recent = res.items;
+    } catch {
+      this._recent = [];
+    }
+  }
+
+  private async _playRecent(item: RecentItem): Promise<void> {
+    if (!this.hass || !item.playlist_id || !this._player || this._busy) return;
+    this._busy = "play";
+    this._error = "";
+    try {
+      await this.hass.callWS({
+        type: "audiomuse/play",
+        entry_id: this._entryId,
+        playlist_id: item.playlist_id,
+        entity_id: this._player,
+      });
+      this._toastRecent = `Playing ${item.playlist_name} on ${this._playerName(this._player)}`;
+    } catch (err) {
+      this._toastRecent = errorText(err);
+    } finally {
+      this._busy = "";
+    }
+  }
+
+  private async _forgetRecent(item: RecentItem): Promise<void> {
+    if (!this.hass) return;
+    await this.hass.callWS({ type: "audiomuse/recent_remove", item_id: item.id });
+    this._recent = this._recent.filter((i) => i.id !== item.id);
   }
 
   private _playerName(entityId: string | null): string {
@@ -326,9 +586,16 @@ class AudioMusePanel extends LitElement {
     const entry = this._entry!;
     return html`
       ${this._renderStatus(entry)}
-      <div class="grid">
-        <section class="card make">${this._renderMake(entry)}</section>
-        <section class="card ideas">${this._renderIdeas()}</section>
+      <div class="layout">
+        <div class="col main">
+          <section class="card make">${this._renderMake(entry)}</section>
+          <section class="card recent">${this._renderRecent()}</section>
+        </div>
+        <div class="col side">
+          <section class="card ideas">${this._renderIdeas()}</section>
+          <section class="card artists">${this._renderArtists()}</section>
+          <section class="card radios">${this._renderRadios(entry)}</section>
+        </div>
       </div>
     `;
   }
@@ -379,12 +646,13 @@ class AudioMusePanel extends LitElement {
             10–30 seconds.</div>`
         : nothing}
       ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : nothing}
-      ${this._tracks ? this._renderResult(entry) : nothing}
+      ${this._result ? this._renderResult(entry) : nothing}
     `;
   }
 
   private _renderResult(entry: Entry): TemplateResult {
-    const tracks = this._tracks!;
+    const result = this._result!;
+    const tracks = result.tracks;
     const busy = this._busy !== "";
     const serverType = entry.music_server_type ?? "this";
     let playHint: TemplateResult | typeof nothing = nothing;
@@ -402,7 +670,11 @@ class AudioMusePanel extends LitElement {
     return html`
       <div class="result">
         <div class="result-head">
-          <strong>${tracks.length} songs</strong>${this._model ? html`<span class="muted"> · picked by ${this._model}</span>` : nothing}
+          <strong>${songs(tracks.length)}</strong>${result.label
+            ? html`<span class="muted"> · ${result.label}</span>`
+            : result.model
+              ? html`<span class="muted"> · picked by ${result.model}</span>`
+              : nothing}
         </div>
         <ol class="tracks">
           ${tracks.map(
@@ -479,6 +751,129 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
+  private _renderArtists(): TemplateResult {
+    const busy = this._busy !== "";
+    return html`
+      <h2>Similar artists</h2>
+      <input
+        class="search"
+        type="search"
+        aria-label="Search artists"
+        placeholder="Search your artists"
+        .value=${this._artistQuery}
+        @input=${(e: Event) => this._onArtistInput((e.target as HTMLInputElement).value)}
+      />
+      ${this._artistSearching ? html`<p class="muted">Searching…</p>` : nothing}
+      ${this._artistResults.length
+        ? html`<ul class="list">
+            ${this._artistResults.map(
+              (a) => html`<li>
+                <button class="row-button" @click=${() => this._pickArtist(a.name)}>
+                  <span>${a.name}</span><span class="muted">${songs(a.track_count)}</span>
+                </button>
+              </li>`
+            )}
+          </ul>`
+        : this._artistQuery.trim().length >= 2 && !this._artistSearching && !this._selectedArtist
+          ? html`<p class="muted">No analysed artist matches that.</p>`
+          : nothing}
+      ${this._artistError ? html`<p class="error">${this._artistError}</p>` : nothing}
+      ${this._selectedArtist && !this._artistResults.length
+        ? html`
+            ${this._similarLoading ? html`<p class="muted">Finding similar artists…</p>` : nothing}
+            ${this._similar
+              ? html`<p class="muted">Sounds like <strong>${this._selectedArtist}</strong>:</p>
+                  ${this._similar.length
+                    ? html`<ul class="list similar">
+                        ${this._similar.map(
+                          (a, i) => html`<li class=${i < this._includeSimilar ? "included" : ""}>
+                            <button class="row-button" @click=${() => this._pickArtist(a.name)}>
+                              <span>${a.name}</span><span class="muted">${songs(a.track_count)}</span>
+                            </button>
+                          </li>`
+                        )}
+                      </ul>`
+                    : html`<p class="muted">No similar artists found yet.</p>`}
+                  <div class="row">
+                    <label class="count"
+                      >Include
+                      <input
+                        type="number"
+                        min="0"
+                        max=${Math.min(20, this._similar.length)}
+                        .value=${String(this._includeSimilar)}
+                        @change=${(e: Event) => {
+                          const n = parseInt((e.target as HTMLInputElement).value, 10);
+                          if (!Number.isNaN(n)) this._includeSimilar = Math.min(Math.max(n, 0), 20);
+                        }}
+                      />
+                      similar</label
+                    >
+                    <button class="primary" ?disabled=${busy} @click=${() => this._makeArtistMix()}>Make a mix</button>
+                  </div>`
+              : nothing}
+          `
+        : nothing}
+    `;
+  }
+
+  private _renderRadios(entry: Entry): TemplateResult {
+    const enabled = (this._radios ?? []).filter((r) => r.enabled).length;
+    return html`
+      <h2>Radios</h2>
+      ${this._radiosError ? html`<p class="error">${this._radiosError}</p>` : nothing}
+      ${this._radios === null && !this._radiosError ? html`<p class="muted">Loading…</p>` : nothing}
+      ${this._radios && !this._radios.length
+        ? html`<p class="muted">No Radios yet. Create them on AudioMuse-AI's
+            <a href=${`${entry.url}/alchemy`} target="_blank" rel="noreferrer">Song Alchemy</a> page, then refresh them
+            into your library from here.</p>`
+        : nothing}
+      ${this._radios?.length
+        ? html`<ul class="list">
+              ${this._radios.map(
+                (r) => html`<li class="radio ${r.enabled ? "" : "off"}">
+                  <span>${r.name}</span><span class="muted">${songs(r.songs)}${r.enabled ? "" : " · off"}</span>
+                </li>`
+              )}
+            </ul>
+            <div class="row">
+              <button ?disabled=${this._radiosBusy || !enabled} @click=${() => this._runRadios()}>
+                ${this._radiosBusy ? "Refreshing…" : "Refresh into library"}
+              </button>
+            </div>`
+        : nothing}
+      ${this._radiosMsg ? html`<p class="hint">${this._radiosMsg}</p>` : nothing}
+    `;
+  }
+
+  private _renderRecent(): TemplateResult {
+    return html`
+      <h2>Recent</h2>
+      ${!this._recent.length
+        ? html`<p class="muted">Playlists you save from Home Assistant appear here.</p>`
+        : html`<ul class="list recent-list">
+            ${this._recent.map(
+              (item) => html`<li>
+                <div class="recent-text">
+                  <span>${item.playlist_name}</span>
+                  <span class="muted"
+                    >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
+                      ? html` · ${item.source === "artist" ? "artist" : "request"}: ${item.detail}`
+                      : nothing}</span
+                  >
+                </div>
+                ${this._canPlay && item.playlist_id
+                  ? html`<button ?disabled=${this._busy !== ""} @click=${() => this._playRecent(item)}>Play</button>`
+                  : nothing}
+                <button class="icon" aria-label="Forget" title="Forget (the playlist stays in your library)"
+                  @click=${() => this._forgetRecent(item)}>×</button>
+              </li>`
+            )}
+          </ul>`}
+      ${this._toastRecent ? html`<p class="hint" role="status">${this._toastRecent}</p>` : nothing}
+    `;
+  }
+
   static styles = css`
     :host {
       display: block;
@@ -523,16 +918,103 @@ class AudioMusePanel extends LitElement {
       font-size: 14px;
       margin: 0 4px 12px;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr;
+    .layout {
+      display: flex;
+      flex-direction: column;
       gap: 16px;
-      align-items: start;
     }
+    .col {
+      display: contents;
+    }
+    /* phone order: make, ideas, artists, recent, radios */
+    .make { order: 1; }
+    .ideas { order: 2; }
+    .artists { order: 3; }
+    .recent { order: 4; }
+    .radios { order: 5; }
     @media (min-width: 900px) {
-      .grid {
-        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+      .layout {
+        flex-direction: row;
+        align-items: flex-start;
       }
+      .col {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-width: 0;
+      }
+      .col.main { flex: 2; }
+      .col.side { flex: 1; }
+    }
+    .search {
+      width: 100%;
+    }
+    .list {
+      list-style: none;
+      margin: 8px 0 0;
+      padding: 0;
+    }
+    .list li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--divider-color, #eee);
+    }
+    .list li:last-child {
+      border-bottom: none;
+    }
+    .row-button {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 6px;
+      color: var(--primary-text-color);
+      text-align: left;
+    }
+    .row-button:hover {
+      background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
+    }
+    .similar li.included .row-button span:first-child {
+      font-weight: 500;
+    }
+    .similar li.included::before {
+      content: "✓";
+      color: var(--primary-color);
+      width: 1em;
+    }
+    .similar li:not(.included)::before {
+      content: "";
+      width: 1em;
+    }
+    .radio {
+      justify-content: space-between;
+    }
+    .radio.off {
+      opacity: 0.6;
+    }
+    .recent-text {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .recent-text span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    button.icon {
+      border: none;
+      padding: 4px 8px;
+      font-size: 18px;
+      color: var(--secondary-text-color);
+    }
+    a {
+      color: var(--primary-color);
     }
     .card {
       background: var(--card-background-color, #fff);
