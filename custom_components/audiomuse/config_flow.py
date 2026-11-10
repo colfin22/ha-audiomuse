@@ -80,7 +80,11 @@ class AudioMuseConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for the server URL and API token."""
         errors: dict[str, str] = {}
-        placeholders = {"min_version": ".".join(map(str, MIN_VERSION)), "version": ""}
+        placeholders = {
+            "min_version": ".".join(map(str, MIN_VERSION)),
+            "version": "",
+            "example_url": "http://audiomuse.local:8000",
+        }
         if user_input is not None:
             url = _normalise_url(user_input[CONF_URL])
             await self.async_set_unique_id(url.lower())
