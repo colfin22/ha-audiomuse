@@ -8,7 +8,7 @@ A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/Au
 
 Installing the integration adds an **AudioMuse** page to the Home Assistant sidebar:
 
-- **Make a playlist:** describe it, or tap one of AudioMuse-AI's ideas, and see the songs it picked.
+- **Make a playlist:** describe it and let AudioMuse-AI's AI pick the songs, or use **Quick search** (AudioMuse-AI's text search: faster, no AI needed). Tap one of AudioMuse-AI's ideas for a one-tap playlist.
 - **Similar artists:** search your artists, see who sounds like them and make a mix.
 - **Radios:** refresh your AudioMuse-AI Radios into your library.
 - **Recent:** playlists saved from Home Assistant, ready to play again.
@@ -27,7 +27,7 @@ Every action returns its result as response data, so you can use them in automat
 ## Requirements
 
 - AudioMuse-AI **3.7.1 or newer**, reachable from Home Assistant, with its API token.
-- For Instant Playlist: an AI provider configured **in AudioMuse-AI** (OpenAI-compatible, Ollama, Gemini or Mistral). Choose a model that supports tool calling; AudioMuse-AI requires it. Your AI key stays in AudioMuse-AI.
+- Optional, for **AI pick**: an AI provider configured **in AudioMuse-AI** (OpenAI-compatible, Ollama, Gemini or Mistral). Choose a model that supports tool calling; AudioMuse-AI requires it. Your AI key stays in AudioMuse-AI. Quick search, ideas, similar artists and Radios work without AI.
 - For playback: the Music Assistant integration, with your music server added as a Music Assistant provider.
 
 ## Installation (HACS)
@@ -51,6 +51,7 @@ Every action returns its result as response data, so you can use them in automat
 action: audiomuse.instant_playlist
 data:
   prompt: "Relaxed acoustic songs for a rainy afternoon"
+  mode: ai          # or "search" for quick text search, no AI needed
   count: 20
   play_on: media_player.kitchen
 response_variable: playlist

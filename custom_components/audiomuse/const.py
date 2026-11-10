@@ -68,3 +68,7 @@ ATTR_PLAY_ON: Final = "play_on"
 ATTR_ARTIST: Final = "artist"
 ATTR_PLAYLIST_ID: Final = "playlist_id"
 ATTR_INCLUDE_SIMILAR: Final = "include_similar"
+ATTR_MODE: Final = "mode"
+
+MODE_AI: Final = "ai"
+MODE_SEARCH: Final = "search"

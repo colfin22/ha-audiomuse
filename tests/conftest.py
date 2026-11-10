@@ -28,6 +28,23 @@ if HAS_HA:
         """Let Home Assistant load the integration from custom_components/."""
         yield
 
+    @pytest.fixture(autouse=True)
+    def mock_ai_provider(request):
+        """AudioMuse-AI reports an AI provider unless a test says otherwise.
+
+        Not applied to the HTTP client tests, which exercise the real method.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        if request.node.path.name == "test_api.py":
+            yield None
+            return
+        with patch(
+            "custom_components.audiomuse.api.AudioMuseClient.get_ai_provider",
+            AsyncMock(return_value="OPENAI"),
+        ) as mock:
+            yield mock
+
 else:
     PKG_DIR = Path(__file__).resolve().parents[1] / "custom_components" / "audiomuse"
     for name, path in (("custom_components", PKG_DIR.parent), ("custom_components.audiomuse", PKG_DIR)):

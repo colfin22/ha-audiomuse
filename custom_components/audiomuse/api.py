@@ -210,6 +210,12 @@ class AudioMuseClient:
                     data = await resp.json(content_type=None)
                 except (aiohttp.ContentTypeError, ValueError):
                     data = None
+                if resp.status == 503:
+                    raise AudioMuseResponseError(
+                        "AudioMuse-AI isn't ready for this yet (it is still building its indexes after "
+                        f"analysis): {_error_message(data, resp.status)}",
+                        resp.status,
+                    )
                 if resp.status >= 400:
                     raise AudioMuseResponseError(_error_message(data, resp.status), resp.status)
                 return data
@@ -287,6 +293,22 @@ class AudioMuseClient:
     async def run_radios(self) -> dict[str, Any]:
         """Create or refresh one music-server playlist per enabled Radio."""
         return await self._request("POST", "/api/radios/run", json={}, timeout=AI_TIMEOUT) or {}
+
+    async def text_search(self, query: str, count: int) -> list[Track]:
+        """Songs whose sound matches a text description (AudioMuse-AI text search, no AI)."""
+        data = await self._request(
+            "POST", "/api/clap/search", json={"query": query, "limit": count}, timeout=AI_TIMEOUT
+        ) or {}
+        tracks = [_track(t) for t in data.get("results") or [] if t.get("item_id")]
+        if not tracks:
+            raise AudioMuseResponseError("AudioMuse-AI found no songs for that description")
+        return tracks
+
+    async def get_ai_provider(self) -> str | None:
+        """AudioMuse-AI's own default AI provider for Instant Playlist ('NONE' when not set up)."""
+        data = await self._request("GET", "/chat/api/config_defaults") or {}
+        provider = data.get("default_ai_provider")
+        return str(provider).upper() if provider else None
 
     async def instant_playlist(
         self,

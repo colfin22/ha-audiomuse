@@ -10,6 +10,14 @@ instant_playlist:
       selector:
         text:
           multiline: true
+    mode:
+      default: ai
+      selector:
+        select:
+          translation_key: mode
+          options:
+            - ai
+            - search
     count:
       selector:
         number:

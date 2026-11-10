@@ -28,6 +28,7 @@ from .const import (
     ATTR_CONFIG_ENTRY_ID,
     ATTR_COUNT,
     ATTR_INCLUDE_SIMILAR,
+    ATTR_MODE,
     ATTR_NAME,
     ATTR_PLAY_ON,
     ATTR_PLAYLIST_ID,
@@ -44,6 +45,8 @@ from .const import (
     MA_MAPPING_BY_SERVER_TYPE,
     MAX_COUNT,
     MIN_COUNT,
+    MODE_AI,
+    MODE_SEARCH,
     MUSIC_ASSISTANT_DOMAIN,
     SERVICE_ARTIST_PLAYLIST,
     SERVICE_INSTANT_PLAYLIST,
@@ -68,6 +71,7 @@ INSTANT_SCHEMA = vol.Schema(
     {
         **_ENTRY,
         vol.Required(ATTR_PROMPT): vol.All(cv.string, vol.Length(min=1, max=2000)),
+        vol.Optional(ATTR_MODE, default=MODE_AI): vol.In([MODE_AI, MODE_SEARCH]),
         vol.Optional(ATTR_COUNT): _COUNT,
         vol.Optional(ATTR_NAME): cv.string,
         vol.Optional(ATTR_SAVE, default=True): cv.boolean,
@@ -111,7 +115,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def instant_playlist(call: ServiceCall) -> ServiceResponse:
         entry = _get_entry(hass, call)
         prompt: str = call.data[ATTR_PROMPT]
-        result = await async_make_instant(entry, prompt, call.data.get(ATTR_COUNT))
+        if call.data[ATTR_MODE] == MODE_SEARCH:
+            result = await async_make_search(entry, prompt, call.data.get(ATTR_COUNT))
+        else:
+            result = await async_make_instant(entry, prompt, call.data.get(ATTR_COUNT))
         response: dict[str, Any] = {
             "tracks": [t.as_dict() for t in result.tracks],
             "ai_provider": result.ai_provider,
@@ -222,6 +229,27 @@ async def async_make_instant(
         )
     except AudioMuseError as err:
         raise HomeAssistantError(f"Instant Playlist failed: {err}") from err
+
+
+def ai_configured(entry: AudioMuseConfigEntry) -> bool:
+    """Whether Instant Playlist has an AI provider (integration option or AudioMuse-AI's own)."""
+    if entry.options.get(CONF_AI_PROVIDER):
+        return True
+    data = entry.runtime_data.coordinator.data
+    provider = data.ai_provider if data else None
+    # Unknown (older server) counts as configured: let AudioMuse-AI answer for itself.
+    return provider is None or provider != "NONE"
+
+
+async def async_make_search(
+    entry: AudioMuseConfigEntry, query: str, count: int | None = None
+) -> InstantPlaylist:
+    """Songs for a description via AudioMuse-AI's text search (fast, no AI)."""
+    try:
+        tracks = await entry.runtime_data.client.text_search(query, count or default_count(entry))
+    except AudioMuseError as err:
+        raise HomeAssistantError(f"Text search failed: {err}") from err
+    return InstantPlaylist(tracks=tracks, message=None, ai_provider=None, ai_model=None)
 
 
 async def async_make_artist_mix(

@@ -190,3 +190,36 @@ async def test_save_playlist_parses_id(client):
 async def test_save_playlist_needs_tracks(client):
     with pytest.raises(ValueError):
         await client.save_playlist("Empty", [])
+
+
+async def test_text_search_maps_author_and_limit(client):
+    with aioresponses() as m:
+        m.post(
+            f"{URL}/api/clap/search",
+            payload={"query": "calm piano", "count": 1, "results": [
+                {"item_id": "t9", "title": "Nocturne", "author": "Alice", "album": "Night", "similarity": 0.4}]},
+        )
+        tracks = await client.text_search("calm piano", 10)
+        body = next(iter(m.requests.values()))[0].kwargs["json"]
+    assert body == {"query": "calm piano", "limit": 10}
+    assert tracks[0].artist == "Alice" and tracks[0].album == "Night"
+
+
+async def test_text_search_no_results_is_an_error(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/clap/search", payload={"query": "x", "count": 0, "results": []})
+        with pytest.raises(AudioMuseResponseError, match="no songs"):
+            await client.text_search("x", 10)
+
+
+async def test_not_ready_503_is_explained(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/similar_artists?artist=Alice&n=10", status=503, payload={"message": "IVF index not loaded"})
+        with pytest.raises(AudioMuseResponseError, match="isn't ready for this yet.*IVF index not loaded"):
+            await client.similar_artists(artist="Alice")
+
+
+async def test_ai_provider(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/chat/api/config_defaults", payload={"default_ai_provider": "none"})
+        assert await client.get_ai_provider() == "NONE"

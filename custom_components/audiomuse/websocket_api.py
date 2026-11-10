@@ -28,8 +28,10 @@ from .const import (
 )
 from .recent import get_recent
 from .services import (
+    ai_configured,
     async_make_artist_mix,
     async_make_instant,
+    async_make_search,
     async_play_playlist,
     async_save_and_play,
     default_count,
@@ -52,6 +54,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_run_radios)
     websocket_api.async_register_command(hass, ws_recent)
     websocket_api.async_register_command(hass, ws_recent_remove)
+    websocket_api.async_register_command(hass, ws_search)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -105,8 +108,14 @@ def _players(hass: HomeAssistant) -> list[dict[str, Any]]:
 async def ws_info(hass: HomeAssistant, connection, msg) -> None:
     """Servers, their status and the speakers the page can play on."""
     entries = []
+    unavailable = [
+        {"entry_id": e.entry_id, "title": e.title, "state": e.state.value, "reason": e.reason}
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.state is not ConfigEntryState.LOADED and not e.disabled_by
+    ]
     for entry in _loaded_entries(hass):
-        data = entry.runtime_data.coordinator.data
+        coordinator = entry.runtime_data.coordinator
+        data = coordinator.data
         server = data.default_server if data else None
         mapping = MA_MAPPING_BY_SERVER_TYPE.get(server.server_type) if server else None
         entries.append(
@@ -124,12 +133,15 @@ async def ws_info(hass: HomeAssistant, connection, msg) -> None:
                 "songs_analysed": data.summary.songs_analysed if data else None,
                 "albums": data.summary.albums if data else None,
                 "busy_workers": data.summary.busy_workers if data else 0,
+                "available": coordinator.last_update_success,
+                "ai_configured": ai_configured(entry),
             }
         )
     connection.send_result(
         msg["id"],
         {
             "entries": entries,
+            "unavailable": unavailable,
             "players": _players(hass),
             "music_assistant": hass.services.has_service(MUSIC_ASSISTANT_DOMAIN, "play_media"),
             "min_count": MIN_COUNT,
@@ -185,7 +197,7 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
-        vol.Optional("source", default="page"): vol.In(["page", "instant", "artist"]),
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist"]),
         vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
@@ -354,3 +366,23 @@ def ws_recent_remove(hass: HomeAssistant, connection, msg) -> None:
     """Forget one recent item (the playlist stays on the music server)."""
     recent = get_recent(hass)
     connection.send_result(msg["id"], {"removed": bool(recent and recent.remove(msg["item_id"]))})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/search",
+        vol.Required("entry_id"): str,
+        vol.Required("query"): vol.All(cv.string, vol.Length(min=1, max=2000)),
+        vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT)),
+    }
+)
+@websocket_api.async_response
+async def ws_search(hass: HomeAssistant, connection, msg) -> None:
+    """Songs for a description via text search (no AI; saving is a separate step)."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        result = await async_make_search(entry, msg["query"], msg.get("count"))
+        return {"tracks": [t.as_dict() for t in result.tracks]}
+
+    await _run(connection, msg, go())

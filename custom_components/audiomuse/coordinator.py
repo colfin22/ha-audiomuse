@@ -29,6 +29,7 @@ class AudioMuseData:
     version: str
     summary: Summary
     servers: list[MusicServer] = field(default_factory=list)
+    ai_provider: str | None = None
 
     @property
     def default_server(self) -> MusicServer | None:
@@ -59,8 +60,14 @@ class AudioMuseCoordinator(DataUpdateCoordinator[AudioMuseData]):
             version = await self.client.get_version()
             summary = await self.client.get_summary()
             servers = await self.client.get_servers()
+            try:
+                ai_provider = await self.client.get_ai_provider()
+            except AudioMuseAuthError:
+                raise
+            except AudioMuseError:
+                ai_provider = None  # optional; older servers may not expose it
         except AudioMuseAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except AudioMuseError as err:
             raise UpdateFailed(str(err)) from err
-        return AudioMuseData(version=version, summary=summary, servers=servers)
+        return AudioMuseData(version=version, summary=summary, servers=servers, ai_provider=ai_provider)

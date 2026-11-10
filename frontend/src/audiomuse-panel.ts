@@ -20,6 +20,15 @@ interface Entry {
   songs_analysed: number | null;
   albums: number | null;
   busy_workers: number;
+  available: boolean;
+  ai_configured: boolean;
+}
+
+interface Unavailable {
+  entry_id: string;
+  title: string;
+  state: string;
+  reason: string | null;
 }
 
 interface Player {
@@ -30,6 +39,7 @@ interface Player {
 
 interface Info {
   entries: Entry[];
+  unavailable: Unavailable[];
   players: Player[];
   music_assistant: boolean;
   min_count: number;
@@ -62,16 +72,18 @@ interface RecentItem {
   entry_id: string;
   playlist_id: string | null;
   playlist_name: string;
-  source: "instant" | "artist" | "page";
+  source: "instant" | "search" | "artist" | "page";
   detail: string | null;
   track_count: number;
   created: string;
 }
 
+type Mode = "ai" | "search";
+
 interface Result {
   tracks: Track[];
   model: string | null;
-  source: "instant" | "artist";
+  source: "instant" | "search" | "artist";
   detail: string;
   label: string;
 }
@@ -167,6 +179,9 @@ class AudioMusePanel extends LitElement {
     _radiosError: { state: true },
     _recent: { state: true },
     _toastRecent: { state: true },
+    _mode: { state: true },
+    _makingMode: { state: true },
+    _elapsed: { state: true },
     _saved: { state: true },
     _player: { state: true },
     _ideas: { state: true },
@@ -200,6 +215,9 @@ class AudioMusePanel extends LitElement {
   declare _radiosError: string;
   declare _recent: RecentItem[];
   declare _toastRecent: string;
+  declare _mode: Mode;
+  declare _makingMode: Mode;
+  declare _elapsed: number;
   declare _saved: Saved | null;
   declare _player: string;
   declare _ideas: string[];
@@ -210,6 +228,23 @@ class AudioMusePanel extends LitElement {
   private _loading = false;
   private _searchTimer?: number;
   private _searchSeq = 0;
+  private _ticker?: number;
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.clearInterval(this._ticker);
+    window.clearTimeout(this._searchTimer);
+  }
+
+  private _startTicker(): void {
+    this._elapsed = 0;
+    window.clearInterval(this._ticker);
+    this._ticker = window.setInterval(() => (this._elapsed += 1), 1000);
+  }
+
+  private _stopTicker(): void {
+    window.clearInterval(this._ticker);
+  }
 
   constructor() {
     super();
@@ -238,6 +273,9 @@ class AudioMusePanel extends LitElement {
     this._radiosError = "";
     this._recent = [];
     this._toastRecent = "";
+    this._mode = "ai";
+    this._makingMode = "ai";
+    this._elapsed = 0;
     this._ideas = [];
     this._shownIdeas = [];
     this._ideasError = "";
@@ -275,12 +313,18 @@ class AudioMusePanel extends LitElement {
     }
   }
 
+  private async _reload(): Promise<void> {
+    this._info = undefined;
+    await this._load();
+  }
+
   private _selectEntry(entryId: string, remember = true): void {
     const entry = this._info?.entries.find((e) => e.entry_id === entryId);
     if (!entry || !this._info) return;
     this._entryId = entryId;
     if (remember) localStorage.setItem(LS_ENTRY, entryId);
     this._count = entry.default_count;
+    this._mode = entry.ai_configured ? "ai" : "search";
     const players = this._info.players.map((p) => p.entity_id);
     const remembered = localStorage.getItem(LS_PLAYER);
     this._player =
@@ -319,29 +363,43 @@ class AudioMusePanel extends LitElement {
     this._shownIdeas = (fresh.length >= IDEAS_SHOWN ? fresh : shuffled(this._ideas)).slice(0, IDEAS_SHOWN);
   }
 
-  private async _make(prompt?: string): Promise<void> {
+  private async _make(prompt?: string, mode?: Mode): Promise<void> {
     if (prompt !== undefined) {
       this._prompt = prompt;
       this._nameTouched = false;
     }
     const text = this._prompt.trim();
     if (!text || !this.hass || this._busy) return;
+    const useMode: Mode = mode ?? (this._entry?.ai_configured ? this._mode : "search");
     this._busy = "make";
+    this._makingMode = useMode;
     this._error = "";
     this._result = null;
     this._saved = null;
+    this._startTicker();
     try {
-      const res = await this.hass.callWS<{ tracks: Track[]; ai_model: string | null }>({
-        type: "audiomuse/instant",
-        entry_id: this._entryId,
-        prompt: text,
-        count: this._count,
-      });
-      this._result = { tracks: res.tracks, model: res.ai_model, source: "instant", detail: text, label: "" };
+      if (useMode === "ai") {
+        const res = await this.hass.callWS<{ tracks: Track[]; ai_model: string | null }>({
+          type: "audiomuse/instant",
+          entry_id: this._entryId,
+          prompt: text,
+          count: this._count,
+        });
+        this._result = { tracks: res.tracks, model: res.ai_model, source: "instant", detail: text, label: "" };
+      } else {
+        const res = await this.hass.callWS<{ tracks: Track[] }>({
+          type: "audiomuse/search",
+          entry_id: this._entryId,
+          query: text,
+          count: this._count,
+        });
+        this._result = { tracks: res.tracks, model: null, source: "search", detail: text, label: "quick search" };
+      }
       if (!this._nameTouched) this._name = nameFromPrompt(text);
     } catch (err) {
       this._error = errorText(err);
     } finally {
+      this._stopTicker();
       this._busy = "";
     }
   }
@@ -448,6 +506,8 @@ class AudioMusePanel extends LitElement {
     this._error = "";
     this._result = null;
     this._saved = null;
+    this._makingMode = "search";
+    this._startTicker();
     this.shadowRoot?.querySelector(".make")?.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
       const res = await this.hass.callWS<{ artists: string[]; tracks: Track[] }>({
@@ -470,6 +530,7 @@ class AudioMusePanel extends LitElement {
     } catch (err) {
       this._error = errorText(err);
     } finally {
+      this._stopTicker();
       this._busy = "";
     }
   }
@@ -579,12 +640,24 @@ class AudioMusePanel extends LitElement {
         <button @click=${() => this._load()}>Try again</button></div>`;
     }
     if (!this._info) return html`<div class="card"><p class="muted">Loading…</p></div>`;
+    if (!this._info.entries.length && this._info.unavailable.length) {
+      return html`<div class="card banner">
+        <p><strong>${this._info.unavailable.map((u) => u.title).join(", ")}</strong> can't be reached right now.
+          Home Assistant keeps retrying in the background.</p>
+        ${this._info.unavailable[0].reason ? html`<p class="muted">${this._info.unavailable[0].reason}</p>` : nothing}
+        <button @click=${() => this._reload()}>Try again</button>
+      </div>`;
+    }
     if (!this._info.entries.length) {
       return html`<div class="card"><p>No AudioMuse-AI server is set up. Add one under
         <strong>Settings → Devices &amp; services → Add integration → AudioMuse-AI</strong>.</p></div>`;
     }
     const entry = this._entry!;
     return html`
+      ${!entry.available
+        ? html`<div class="card banner warn" role="alert">AudioMuse-AI isn't answering right now, so actions may
+            fail. Home Assistant keeps retrying. <button class="link" @click=${() => this._reload()}>Refresh</button></div>`
+        : nothing}
       ${this._renderStatus(entry)}
       <div class="layout">
         <div class="col main">
@@ -625,6 +698,24 @@ class AudioMusePanel extends LitElement {
         }}
       ></textarea>
       <div class="row">
+        <div class="mode" role="radiogroup" aria-label="How to pick songs">
+          <button
+            role="radio"
+            aria-checked=${this._mode === "ai"}
+            class=${this._mode === "ai" && entry.ai_configured ? "on" : ""}
+            ?disabled=${!entry.ai_configured || busy}
+            title=${entry.ai_configured ? "AudioMuse-AI's AI picks the songs" : "Needs an AI provider"}
+            @click=${() => (this._mode = "ai")}
+          >AI pick</button>
+          <button
+            role="radio"
+            aria-checked=${this._mode === "search" || !entry.ai_configured}
+            class=${this._mode === "search" || !entry.ai_configured ? "on" : ""}
+            ?disabled=${busy}
+            title="AudioMuse-AI's text search: faster, no AI needed"
+            @click=${() => (this._mode = "search")}
+          >Quick search</button>
+        </div>
         <label class="count"
           >Songs
           <input
@@ -641,9 +732,15 @@ class AudioMusePanel extends LitElement {
           Make playlist
         </button>
       </div>
+      ${!entry.ai_configured
+        ? html`<p class="hint">AI pick needs an AI provider. Set one in AudioMuse-AI's
+            <a href=${`${entry.url}/setup`} target="_blank" rel="noreferrer">Setup Wizard</a> or in this integration's
+            options. Quick search works without it.</p>`
+        : nothing}
       ${this._busy === "make"
-        ? html`<div class="working"><span class="spinner"></span>Asking the AI to pick songs… this usually takes
-            10–30 seconds.</div>`
+        ? html`<div class="working" role="status"><span class="spinner"></span>${this._makingMode === "ai"
+            ? `Asking the AI to pick songs… ${this._elapsed} s (usually 10–30 s)`
+            : `Finding songs… ${this._elapsed} s`}</div>`
         : nothing}
       ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : nothing}
       ${this._result ? this._renderResult(entry) : nothing}
@@ -735,12 +832,16 @@ class AudioMusePanel extends LitElement {
   private _renderIdeas(): TemplateResult {
     return html`
       <h2>Playlist ideas</h2>
-      <p class="muted">Suggestions from your library. Tap one to make it.</p>
+      <p class="muted">Suggestions from your library. Tap one for a quick playlist (no AI needed).</p>
+      ${!this._ideas.length && !this._ideasError ? html`<p class="muted">Loading ideas…</p>` : nothing}
       ${this._ideasError
         ? html`<p class="error">${this._ideasError}</p>`
         : html`<div class="chips">
             ${this._shownIdeas.map(
-              (idea) => html`<button class="chip" ?disabled=${this._busy !== ""} @click=${() => this._make(idea)}>
+              (idea) => html`<button class="chip" ?disabled=${this._busy !== ""} @click=${() => {
+                  this._mode = "search";
+                  void this._make(idea, "search");
+                }}>
                 ${idea}
               </button>`
             )}
@@ -762,6 +863,9 @@ class AudioMusePanel extends LitElement {
         placeholder="Search your artists"
         .value=${this._artistQuery}
         @input=${(e: Event) => this._onArtistInput((e.target as HTMLInputElement).value)}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === "Enter" && this._artistResults.length) void this._pickArtist(this._artistResults[0].name);
+        }}
       />
       ${this._artistSearching ? html`<p class="muted">Searching…</p>` : nothing}
       ${this._artistResults.length
@@ -858,7 +962,7 @@ class AudioMusePanel extends LitElement {
                   <span>${item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
-                      ? html` · ${item.source === "artist" ? "artist" : "request"}: ${item.detail}`
+                      ? html` · ${item.source === "artist" ? "artist" : item.source === "search" ? "search" : "request"}: ${item.detail}`
                       : nothing}</span
                   >
                 </div>
@@ -1015,6 +1119,38 @@ class AudioMusePanel extends LitElement {
     }
     a {
       color: var(--primary-color);
+    }
+    .mode {
+      display: inline-flex;
+      border: 1px solid var(--primary-color);
+      border-radius: 18px;
+      overflow: hidden;
+    }
+    .mode button {
+      border: none;
+      border-radius: 0;
+      padding: 6px 14px;
+    }
+    .mode button.on {
+      background: var(--primary-color);
+      color: var(--text-primary-color, #fff);
+    }
+    .banner {
+      margin-bottom: 12px;
+    }
+    .banner.warn {
+      border-color: var(--warning-color, #ffa600);
+    }
+    @media (pointer: coarse) {
+      button,
+      .chip,
+      input,
+      select {
+        min-height: 40px;
+      }
+      .mode button {
+        min-height: 38px;
+      }
     }
     .card {
       background: var(--card-background-color, #fff);
