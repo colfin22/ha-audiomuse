@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
@@ -26,12 +27,26 @@ SCAN_INTERVAL: Final = timedelta(minutes=5)
 # AI providers AudioMuse-AI accepts (an empty choice means "use the server's setting").
 AI_PROVIDERS: Final = ["OPENAI", "OLLAMA", "GEMINI", "MISTRAL"]
 
-# AudioMuse-AI music-server type -> Music Assistant provider domain, used to build
-# "<domain>://playlist/<id>" so a brand-new playlist plays without waiting for a
-# Music Assistant library sync. Only verified pairs belong here; any other server
-# type needs the "Music Assistant provider" option set by the user.
-MA_PROVIDER_BY_SERVER_TYPE: Final = {
-    "navidrome": "opensubsonic",
+# AudioMuse-AI music-server type -> how Music Assistant addresses one of its playlists.
+# The play address is "<provider>://playlist/<item id>", which plays a brand-new playlist
+# without waiting for a Music Assistant library sync. Item-id formats come from the
+# Music Assistant provider source: Plex keys playlists by path ("/playlists/<ratingKey>"),
+# the others by the server's own playlist ID. "verified" = tested end to end.
+# Lyrion is absent on purpose: Music Assistant has no Lyrion music-library provider.
+@dataclass(frozen=True)
+class MusicAssistantMapping:
+    """How to build a Music Assistant playlist address for one music-server type."""
+
+    provider: str
+    item_id_format: str = "{id}"
+    verified: bool = False
+
+
+MA_MAPPING_BY_SERVER_TYPE: Final = {
+    "navidrome": MusicAssistantMapping("opensubsonic", verified=True),
+    "jellyfin": MusicAssistantMapping("jellyfin"),
+    "emby": MusicAssistantMapping("emby"),
+    "plex": MusicAssistantMapping("plex", item_id_format="/playlists/{id}"),
 }
 
 MUSIC_ASSISTANT_DOMAIN: Final = "music_assistant"

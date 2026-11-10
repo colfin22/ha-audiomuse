@@ -6,6 +6,7 @@ AudioMuse page can all use the same calls.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -40,7 +41,7 @@ from .const import (
     CONF_MA_PROVIDER,
     DEFAULT_COUNT,
     DOMAIN,
-    MA_PROVIDER_BY_SERVER_TYPE,
+    MA_MAPPING_BY_SERVER_TYPE,
     MAX_COUNT,
     MIN_COUNT,
     MUSIC_ASSISTANT_DOMAIN,
@@ -55,6 +56,9 @@ from .playlist import mix_tracks, playlist_name_from
 
 if TYPE_CHECKING:
     from . import AudioMuseConfigEntry
+
+_LOGGER = logging.getLogger(__name__)
+_WARNED_UNVERIFIED: set[str] = set()
 
 _COUNT = vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT))
 _ENTRY = {vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string}
@@ -242,20 +246,20 @@ async def async_play_playlist(
 ) -> None:
     """Play a music-server playlist on a Music Assistant player.
 
-    Uses the provider URI ("<provider>://playlist/<id>") so a playlist created
-    seconds ago plays without waiting for a Music Assistant library sync.
+    Uses the provider address ("<provider>://playlist/<item id>") so a playlist
+    created seconds ago plays without waiting for a Music Assistant library sync.
     """
     if not hass.services.has_service(MUSIC_ASSISTANT_DOMAIN, "play_media"):
         raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_music_assistant")
-    provider = music_assistant_provider(entry)
-    if not provider:
+    media_id = music_assistant_media_id(entry, playlist_id)
+    if not media_id:
         raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_ma_provider")
     await hass.services.async_call(
         MUSIC_ASSISTANT_DOMAIN,
         "play_media",
         {
             ATTR_ENTITY_ID: player,
-            "media_id": f"{provider}://playlist/{playlist_id}",
+            "media_id": media_id,
             "media_type": "playlist",
             "enqueue": "replace",
         },
@@ -263,14 +267,30 @@ async def async_play_playlist(
     )
 
 
-def music_assistant_provider(entry: AudioMuseConfigEntry) -> str | None:
-    """Which Music Assistant provider serves AudioMuse-AI's default music server."""
-    override = entry.options.get(CONF_MA_PROVIDER)
-    if override:
-        return override.strip()
+def music_assistant_media_id(entry: AudioMuseConfigEntry, playlist_id: str) -> str | None:
+    """The Music Assistant address of a music-server playlist, or None if unknown.
+
+    The "Music Assistant provider" option replaces only the provider part (for
+    example a specific provider instance); the item-id format still follows the
+    music-server type AudioMuse-AI reports.
+    """
     data = entry.runtime_data.coordinator.data
     server = data.default_server if data else None
-    return MA_PROVIDER_BY_SERVER_TYPE.get(server.server_type) if server else None
+    mapping = MA_MAPPING_BY_SERVER_TYPE.get(server.server_type) if server else None
+    override = (entry.options.get(CONF_MA_PROVIDER) or "").strip()
+    provider = override or (mapping.provider if mapping else None)
+    if not provider:
+        return None
+    if mapping and not mapping.verified and server.server_type not in _WARNED_UNVERIFIED:
+        _WARNED_UNVERIFIED.add(server.server_type)
+        _LOGGER.warning(
+            "Playback for %s music servers is built from the Music Assistant source but has not "
+            "been tested end to end yet. If it fails, please report it (and set the "
+            "'Music Assistant provider' option if your provider instance differs)",
+            server.server_type,
+        )
+    item_id = (mapping.item_id_format if mapping else "{id}").format(id=playlist_id)
+    return f"{provider}://playlist/{item_id}"
 
 
 def _get_entry(hass: HomeAssistant, call: ServiceCall) -> AudioMuseConfigEntry:

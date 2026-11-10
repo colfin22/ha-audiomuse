@@ -97,8 +97,28 @@ async def test_instant_playlist_without_save(hass, mock_client):
     assert resp["playlist_id"] is None
 
 
-async def test_unknown_server_type_needs_provider_option(hass, mock_client):
-    mock_client["servers"].return_value = [MusicServer("s1", "Other", "plex", True)]
+@pytest.mark.parametrize(
+    ("server_type", "media_id"),
+    [
+        ("navidrome", "opensubsonic://playlist/pl9"),
+        ("jellyfin", "jellyfin://playlist/pl9"),
+        ("emby", "emby://playlist/pl9"),
+        ("plex", "plex://playlist//playlists/pl9"),
+    ],
+)
+async def test_play_address_per_server_type(hass, mock_client, server_type, media_id):
+    mock_client["servers"].return_value = [MusicServer("s1", "Music", server_type, True)]
+    await _setup(hass)
+    play = async_mock_service(hass, "music_assistant", "play_media")
+    await hass.services.async_call(
+        DOMAIN, "play_playlist", {"playlist_id": "pl9", "entity_id": "media_player.kitchen"},
+        blocking=True, return_response=True,
+    )
+    assert play[0].data["media_id"] == media_id
+
+
+async def test_server_without_ma_provider_is_a_clear_error(hass, mock_client):
+    mock_client["servers"].return_value = [MusicServer("s1", "Other", "lyrion", True)]
     await _setup(hass)
     async_mock_service(hass, "music_assistant", "play_media")
     with pytest.raises(ServiceValidationError):
@@ -116,7 +136,8 @@ async def test_provider_option_overrides_detection(hass, mock_client):
         DOMAIN, "play_playlist", {"playlist_id": "pl9", "entity_id": "media_player.kitchen"},
         blocking=True, return_response=True,
     )
-    assert play[0].data["media_id"] == "plex--abc://playlist/pl9"
+    # The option swaps the provider instance; Plex's path-style item id is kept.
+    assert play[0].data["media_id"] == "plex--abc://playlist//playlists/pl9"
 
 
 async def test_artist_playlist_mixes_similar_artists(hass, mock_client):

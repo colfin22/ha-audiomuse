@@ -50,7 +50,7 @@
           "ai_provider": "Leave empty to use the provider set in AudioMuse-AI.",
           "ai_model": "Leave empty to use the model set in AudioMuse-AI. Pick a model that supports tool calling.",
           "ai_server_url": "Only for OpenAI-compatible services. Leave empty to use AudioMuse-AI's setting.",
-          "music_assistant_provider": "Only needed if playback fails: the Music Assistant provider (or provider instance) for your music server. Navidrome is detected automatically."
+          "music_assistant_provider": "Only needed if playback fails or you have several Music Assistant providers for the same server type: the Music Assistant provider instance ID. Navidrome, Jellyfin, Emby and Plex are detected automatically."
         }
       }
     }
@@ -72,7 +72,7 @@
     "not_loaded": { "message": "No AudioMuse-AI server is loaded." },
     "no_player": { "message": "Choose a speaker, or set a default speaker in the AudioMuse-AI options." },
     "no_music_assistant": { "message": "Playback needs the Music Assistant integration." },
-    "no_ma_provider": { "message": "Cannot tell which Music Assistant provider serves your music server. Set 'Music Assistant provider' in the AudioMuse-AI options." }
+    "no_ma_provider": { "message": "Playback is not available for this music server: Music Assistant has no music provider for it (for example Lyrion), or it is not recognised. Set 'Music Assistant provider' in the AudioMuse-AI options if Music Assistant does have one." }
   },
   "services": {
     "instant_playlist": {
