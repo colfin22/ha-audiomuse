@@ -85,18 +85,19 @@ class AudioMuseConfigFlow(ConfigFlow, domain=DOMAIN):
             url = _normalise_url(user_input[CONF_URL])
             await self.async_set_unique_id(url.lower())
             self._abort_if_unique_id_configured()
-            errors, version = await _validate(self.hass, url, user_input[CONF_API_TOKEN])
+            token = (user_input.get(CONF_API_TOKEN) or "").strip()
+            errors, version = await _validate(self.hass, url, token)
             placeholders["version"] = version or ""
             if not errors:
                 host = urlparse(url).hostname or url
                 return self.async_create_entry(
                     title=f"AudioMuse-AI ({host})",
-                    data={CONF_URL: url, CONF_API_TOKEN: user_input[CONF_API_TOKEN]},
+                    data={CONF_URL: url, CONF_API_TOKEN: token},
                 )
         schema = vol.Schema(
             {
                 vol.Required(CONF_URL, default=(user_input or {}).get(CONF_URL, "")): str,
-                vol.Required(CONF_API_TOKEN): _PASSWORD,
+                vol.Optional(CONF_API_TOKEN): _PASSWORD,
             }
         )
         return self.async_show_form(

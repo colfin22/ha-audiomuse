@@ -192,7 +192,10 @@ class AudioMuseClient:
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
     ) -> Any:
-        headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
+        headers = {"Accept": "application/json"}
+        if self._token:
+            # Only needed when authentication is enabled in AudioMuse-AI.
+            headers["Authorization"] = f"Bearer {self._token}"
         if params:
             params = {k: v for k, v in params.items() if v is not None}
         try:

@@ -223,3 +223,13 @@ async def test_ai_provider(client):
     with aioresponses() as m:
         m.get(f"{URL}/chat/api/config_defaults", payload={"default_ai_provider": "none"})
         assert await client.get_ai_provider() == "NONE"
+
+
+async def test_no_token_sends_no_auth_header():
+    async with aiohttp.ClientSession() as session:
+        client = AudioMuseClient(session, URL, "")
+        with aioresponses() as m:
+            m.get(f"{URL}/api/version", payload={"app_version": "v3.7.1"})
+            await client.get_version()
+            headers = next(iter(m.requests.values()))[0].kwargs["headers"]
+    assert "Authorization" not in headers

@@ -90,3 +90,14 @@ async def test_options_flow_drops_empty_values(hass):
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options == {CONF_DEFAULT_COUNT: 30}
+
+
+async def test_user_flow_without_token(hass):
+    """AudioMuse-AI with authentication off needs no token."""
+    result = await _start(hass)
+    with patch(VERSION, AsyncMock(return_value="v3.7.1")), patch(
+        "custom_components.audiomuse.async_setup_entry", AsyncMock(return_value=True)
+    ):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_URL: URL})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_URL: URL, CONF_API_TOKEN: ""}

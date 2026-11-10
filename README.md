@@ -1,67 +1,108 @@
 # AudioMuse-AI for Home Assistant
 
-A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI). It brings AudioMuse-AI's sonic-analysis playlists into Home Assistant and plays them on your speakers through [Music Assistant](https://www.music-assistant.io/).
+[![Validate](https://github.com/colfin22/ha-audiomuse/actions/workflows/validate.yml/badge.svg)](https://github.com/colfin22/ha-audiomuse/actions/workflows/validate.yml)
+[![Tests](https://github.com/colfin22/ha-audiomuse/actions/workflows/tests.yml/badge.svg)](https://github.com/colfin22/ha-audiomuse/actions/workflows/tests.yml)
 
-> **Status: early development (0.1.0).** The AudioMuse sidebar page, the actions and the sensors work. Next: CI and the first release.
+A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI), the self-hosted sonic-analysis engine for your music library. It adds an **AudioMuse** page to the Home Assistant sidebar for making playlists from your own music. Playlists are saved to your music server, so they show up in every music app, and can be played straight away on your speakers through [Music Assistant](https://www.music-assistant.io/).
 
-## What it does
+![The AudioMuse page](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-desktop.png)
 
-Installing the integration adds an **AudioMuse** page to the Home Assistant sidebar:
+## Features
 
-- **Make a playlist:** describe it and let AudioMuse-AI's AI pick the songs, or use **Quick search** (AudioMuse-AI's text search: faster, no AI needed). Tap one of AudioMuse-AI's ideas for a one-tap playlist.
-- **Similar artists:** search your artists, see who sounds like them and make a mix.
-- **Radios:** refresh your AudioMuse-AI Radios into your library.
-- **Recent:** playlists saved from Home Assistant, ready to play again.
-
-Any playlist can be saved to your music server, or saved and played on a Music Assistant speaker. Everything on the page is also available as an action.
-
-- **Instant Playlist:** describe what you want ("upbeat 90s indie for a Sunday morning"). AudioMuse-AI's AI picks songs from *your* library and saves them as a playlist on your music server, so it shows up in every client app. It can also start it on a speaker straight away.
-- **Similar artists:** find artists in your library that sound like one you name.
-- **Artist playlist:** a mix of one artist plus the artists that sound most like them.
-- **Playlist ideas:** AudioMuse-AI's own suggested prompts.
+- **Make a playlist**
+  - Describe what you want to hear ("dreamy synth pop for a late night drive").
+  - **AI pick** lets AudioMuse-AI's AI choose the songs.
+  - **Quick search** uses AudioMuse-AI's text search instead: faster, and no AI needed.
+- **Playlist ideas:** AudioMuse-AI's own suggestions. Tap one for an instant playlist.
+- **Similar artists:** search your artists, see who sounds like them, and make a mix of an artist plus the closest-sounding ones.
 - **Radios:** refresh your saved AudioMuse-AI Radios into playlists.
-- **Sensors:** songs, albums and artists analysed, busy workers, queued tasks, version.
+- **Recent:** playlists saved from Home Assistant, ready to play again.
+- **Save to library, or Save & play** on any Music Assistant speaker.
+- **Sensors:** songs, albums and artists analysed, busy workers, queued tasks and version.
+- **Actions** for automations, scripts and voice. Every one returns its results.
+- Follows your Home Assistant theme, light or dark, and works on phones and wall tablets.
 
-Every action returns its result as response data, so you can use them in automations, scripts and voice commands.
+| Similar artists | On a phone, dark theme |
+|---|---|
+| ![Similar artists](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-artists.png) | ![Phone, dark theme](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-phone-dark.png) |
 
 ## Requirements
 
-- AudioMuse-AI **3.7.1 or newer**, reachable from Home Assistant, with its API token.
-- Optional, for **AI pick**: an AI provider configured **in AudioMuse-AI** (OpenAI-compatible, Ollama, Gemini or Mistral). Choose a model that supports tool calling; AudioMuse-AI requires it. Your AI key stays in AudioMuse-AI. Quick search, ideas, similar artists and Radios work without AI.
-- For playback: the Music Assistant integration, with your music server added as a Music Assistant provider.
+- **AudioMuse-AI 3.7.1 or newer**, reachable from Home Assistant, with your library analysed. Results only cover analysed songs.
+- **Home Assistant 2025.2 or newer.**
+- **For playback on speakers (optional):** the [Music Assistant](https://www.home-assistant.io/integrations/music_assistant/) integration, with your music server added as a Music Assistant provider. See [Music servers](#music-servers).
+- **For AI pick (optional):** an AI provider configured **in AudioMuse-AI** (OpenAI-compatible, Ollama, Gemini or Mistral).
+  - Choose a model that supports tool calling; AudioMuse-AI requires it.
+  - Your AI key stays in AudioMuse-AI.
+  - Quick search, ideas, similar artists and Radios all work without AI.
 
-## Installation (HACS)
+## Installation
 
-1. HACS → ⋮ → **Custom repositories** → add `https://github.com/colfin22/ha-audiomuse` as an **Integration**.
-2. Install **AudioMuse-AI** and restart Home Assistant.
-3. **Settings → Devices & services → Add integration → AudioMuse-AI**, then enter the server URL and API token.
+### HACS (recommended)
 
-## Options
+1. In HACS, open the ⋮ menu → **Custom repositories**.
+2. Add `https://github.com/colfin22/ha-audiomuse` with the type **Integration**.
+3. Find **AudioMuse-AI** in HACS, select **Download**, then restart Home Assistant.
 
-| Option | What it is for |
+### Manual
+
+Copy `custom_components/audiomuse` into your Home Assistant `config/custom_components/` folder and restart Home Assistant.
+
+## Setup
+
+1. Go to **Settings → Devices & services → Add integration → AudioMuse-AI**.
+2. Enter the AudioMuse-AI address, for example `http://audiomuse.local:8000`.
+3. If authentication is enabled in AudioMuse-AI, enter its **API token**. You'll find it under AudioMuse-AI → **Setup Wizard** → *API token*. Leave it empty if authentication is off.
+
+The **AudioMuse** page appears in the sidebar as soon as a server is added. To change the defaults, open the integration and select **Configure**:
+
+| Option | What it does |
 |---|---|
-| Songs per playlist | Default song count for actions that don't give one. |
-| Default speaker | A Music Assistant speaker for playback when none is chosen. |
-| AI provider / model / server URL | Override AudioMuse-AI's own AI settings for Instant Playlist. Leave empty to use AudioMuse-AI's. |
-| Music Assistant provider | Rarely needed: Navidrome, Jellyfin, Emby and Plex are detected automatically. Set it to a Music Assistant provider instance ID if playback fails or you have several providers of the same kind. |
+| Songs per playlist | Default number of songs. |
+| Default speaker | The Music Assistant speaker the page starts with, and actions use when none is given. |
+| AI provider / model / server URL | Override AudioMuse-AI's own AI settings for AI pick. Leave empty to use AudioMuse-AI's. |
+| Music Assistant provider | Rarely needed. Set it to a Music Assistant provider instance ID if playback fails or you have several providers of the same kind. |
 
-## Example: make and play a playlist from an automation
+## Actions
+
+| Action | What it does | Returns |
+|---|---|---|
+| `audiomuse.instant_playlist` | Songs for a request, by AI pick (`mode: ai`) or quick search (`mode: search`). Saves the playlist and can start it on a speaker. | `tracks`, `playlist_id`, `playlist_name`, `played_on`, `ai_model` |
+| `audiomuse.artist_playlist` | A mix of an artist plus the most similar-sounding artists. | `artists`, `tracks`, `playlist_id`, `playlist_name` |
+| `audiomuse.similar_artists` | Artists that sound like the one given. | `artists` |
+| `audiomuse.playlist_ideas` | AudioMuse-AI's suggested prompts. | `ideas` |
+| `audiomuse.run_radios` | Refresh every enabled Radio into a playlist. | run summary |
+| `audiomuse.play_playlist` | Play a saved playlist on a Music Assistant speaker. | `played_on` |
+
+AudioMuse-AI adds `_instant` to the names of playlists it saves.
+
+### Example: a playlist from a button or voice command
 
 ```yaml
 action: audiomuse.instant_playlist
 data:
   prompt: "Relaxed acoustic songs for a rainy afternoon"
-  mode: ai          # or "search" for quick text search, no AI needed
+  mode: search          # or "ai" to let the AI pick
   count: 20
   play_on: media_player.kitchen
 response_variable: playlist
 ```
 
-`playlist.tracks` holds the songs, and `playlist.playlist_name` the saved name. AudioMuse-AI adds `_instant` to playlist names.
+`playlist.tracks` holds the songs and `playlist.playlist_name` the saved name.
+
+## Sensors
+
+| Sensor | Meaning |
+|---|---|
+| Songs analysed / Albums analysed / Artists analysed | How much of the library AudioMuse-AI has analysed. |
+| Busy workers | AudioMuse-AI workers currently working (attribute: task types). |
+| Queued tasks | Tasks waiting in AudioMuse-AI's queue. |
+| Unanalysable songs | Songs AudioMuse-AI could not analyse (diagnostic). |
+| Version | AudioMuse-AI version and music server (diagnostic). |
 
 ## Music servers
 
-Everything except playback works with every music server AudioMuse-AI supports, because AudioMuse-AI does the work and saves playlists to your server itself. Playback on a speaker goes through Music Assistant, so it depends on Music Assistant having a provider for your server:
+Everything except playback works with every music server AudioMuse-AI supports. AudioMuse-AI does the work and saves playlists to the server itself. Playback goes through Music Assistant, so it depends on Music Assistant having a provider for your server:
 
 | Music server | Playlists, artists, ideas, Radios, sensors | Play on a speaker (Music Assistant) |
 |---|---|---|
@@ -71,21 +112,35 @@ Everything except playback works with every music server AudioMuse-AI supports, 
 | Plex | ✅ | 🧪 should work, not yet tested |
 | Lyrion | ✅ | ❌ Music Assistant has no Lyrion music provider |
 
-🧪 = built from the Music Assistant provider source but not yet confirmed on a real server. **If you use Jellyfin, Emby or Plex, please try playback and report the result in an issue.** It helps everyone.
+🧪 means built from the Music Assistant provider source but not yet confirmed on a real server. **Testers wanted:** if you use Jellyfin, Emby or Plex, please try **Save & play** and report the result in an [issue](https://github.com/colfin22/ha-audiomuse/issues).
 
-A playlist made a moment ago plays straight away: the integration asks Music Assistant for it by its music-server ID, so it doesn't wait for a Music Assistant library sync. If you have more than one Music Assistant provider for the same kind of server, set the **Music Assistant provider** option to the instance you want.
+A playlist made a moment ago plays straight away. The integration asks Music Assistant for it by its music-server ID, so it doesn't wait for a Music Assistant library sync.
+
+## Troubleshooting
+
+| You see | What to do |
+|---|---|
+| **AI pick is greyed out** | AudioMuse-AI has no AI provider. Set one in AudioMuse-AI's Setup Wizard, or in this integration's options. Quick search works meanwhile. |
+| **"AudioMuse-AI isn't ready for this yet"** | AudioMuse-AI is still building its search indexes after analysis. Similar artists and searches work once its first analysis batch has finished. |
+| **"AudioMuse-AI rejected the request"** | Authentication is enabled in AudioMuse-AI. Enter its API token, or update it if it changed (Home Assistant will ask you to). |
+| **No "Save & play" button** | Install the Music Assistant integration, with your music server as a provider. Lyrion servers can't be played through Music Assistant. |
+| **Playback fails on Jellyfin, Emby or Plex** | Set **Music Assistant provider** in the options to your provider's instance ID, and please open an issue. |
+| **AI pick returns odd songs or errors** | Use a model that supports tool calling. |
 
 ## How this relates to Music Assistant's AudioMuse-AI plugin
 
-Music Assistant has its own AudioMuse-AI plugin (similar tracks, an "Inspired by recently played" row and free-text search, inside Music Assistant). This integration is complementary: it brings AI Instant Playlists, artist playlists, playlist ideas, Radios, sensors and Home Assistant actions into Home Assistant itself. You can use both.
+Music Assistant has its own AudioMuse-AI plugin, which provides similar tracks, an "Inspired by recently played" row and free-text search inside Music Assistant. This integration is complementary: it brings AI and quick-search playlists, artist mixes, playlist ideas, Radios, sensors and actions into Home Assistant itself. You can use both.
 
-## Notes
+## Privacy
 
-- The integration never changes AudioMuse-AI's settings.
+- The integration talks only to your AudioMuse-AI server and, for playback, to Music Assistant inside Home Assistant.
+- It never changes AudioMuse-AI's settings.
+- Your AI key never leaves AudioMuse-AI.
+- Playlists are created by AudioMuse-AI on your music server, with AudioMuse-AI's own music-server account.
 
 ## Development
 
-The sidebar page is written in TypeScript with [Lit](https://lit.dev) and bundled into `custom_components/audiomuse/frontend/audiomuse-panel.js`, which is committed so HACS users need no build step.
+The sidebar page is written in TypeScript with [Lit](https://lit.dev) and bundled with esbuild into `custom_components/audiomuse/frontend/audiomuse-panel.js`. The bundle is committed, so HACS users need no build step, and CI checks it matches the source.
 
 ```bash
 cd frontend
@@ -93,7 +148,7 @@ npm ci
 npm run build   # type-check and bundle
 ```
 
-Tests: `pip install -r tests/requirements.txt` runs the client tests; install `pytest-homeassistant-custom-component` as well to run the Home Assistant tests (`pytest`).
+Tests run with `pytest`. `pip install -r tests/requirements.txt` is enough for the client tests; add `pytest-homeassistant-custom-component` to run the Home Assistant tests too.
 
 ## Licence
 
