@@ -162,7 +162,16 @@ class AudioMuseOptionsFlow(OptionsFlow):
                     description={"suggested_value": opts.get(CONF_DEFAULT_PLAYER)},
                 ): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="media_player", integration=MUSIC_ASSISTANT_DOMAIN
+                        filter=[
+                            {
+                                "domain": "media_player",
+                                "integration": MUSIC_ASSISTANT_DOMAIN,
+                                # Leaves out Music Assistant's dashboard-display casts.
+                                "supported_features": [
+                                    "media_player.MediaPlayerEntityFeature.MEDIA_ENQUEUE"
+                                ],
+                            }
+                        ]
                     )
                 ),
                 vol.Optional(

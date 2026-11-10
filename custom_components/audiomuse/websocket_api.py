@@ -10,6 +10,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -89,13 +90,23 @@ async def _run(connection, msg, coro) -> None:
 
 
 def _players(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Music Assistant speakers, found dynamically from the entity registry."""
+    """Music Assistant players that can take a queue, found from the entity registry.
+
+    Music Assistant also creates media players for its "dashboard display" casts
+    (its UI shown on a screen); they share the device's name but cannot queue
+    music, so only players supporting MEDIA_ENQUEUE are listed.
+    """
     registry = er.async_get(hass)
     players = []
     for ent in registry.entities.values():
         if ent.platform != MUSIC_ASSISTANT_DOMAIN or ent.domain != "media_player" or ent.disabled:
             continue
         state = hass.states.get(ent.entity_id)
+        features = int(
+            (state.attributes.get("supported_features") if state else None) or ent.supported_features or 0
+        )
+        if not features & MediaPlayerEntityFeature.MEDIA_ENQUEUE:
+            continue
         name = (state.attributes.get("friendly_name") if state else None) or ent.name or ent.original_name
         players.append(
             {"entity_id": ent.entity_id, "name": name or ent.entity_id, "state": state.state if state else None}

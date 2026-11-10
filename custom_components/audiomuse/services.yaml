@@ -34,8 +34,11 @@ instant_playlist:
     play_on:
       selector:
         entity:
-          domain: media_player
-          integration: music_assistant
+          filter:
+            - domain: media_player
+              integration: music_assistant
+              supported_features:
+                - media_player.MediaPlayerEntityFeature.MEDIA_ENQUEUE
 
 similar_artists:
   fields:
@@ -90,8 +93,11 @@ artist_playlist:
     play_on:
       selector:
         entity:
-          domain: media_player
-          integration: music_assistant
+          filter:
+            - domain: media_player
+              integration: music_assistant
+              supported_features:
+                - media_player.MediaPlayerEntityFeature.MEDIA_ENQUEUE
 
 playlist_ideas:
   fields:
@@ -120,5 +126,8 @@ play_playlist:
     entity_id:
       selector:
         entity:
-          domain: media_player
-          integration: music_assistant
+          filter:
+            - domain: media_player
+              integration: music_assistant
+              supported_features:
+                - media_player.MediaPlayerEntityFeature.MEDIA_ENQUEUE

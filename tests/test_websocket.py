@@ -44,11 +44,13 @@ async def _setup(hass):
     return entry
 
 
-def _add_ma_player(hass, object_id="kitchen"):
+def _add_ma_player(hass, object_id="kitchen", name="Kitchen speaker", features=8320575):
     er.async_get(hass).async_get_or_create(
         "media_player", "music_assistant", f"uid_{object_id}", suggested_object_id=object_id
     )
-    hass.states.async_set(f"media_player.{object_id}", "idle", {"friendly_name": "Kitchen speaker"})
+    hass.states.async_set(
+        f"media_player.{object_id}", "idle", {"friendly_name": name, "supported_features": features}
+    )
 
 
 async def test_panel_added_and_removed(hass, mock_client):
@@ -64,6 +66,8 @@ async def test_panel_added_and_removed(hass, mock_client):
 async def test_info_lists_servers_and_ma_players(hass, hass_ws_client, mock_client):
     entry = await _setup(hass)
     _add_ma_player(hass)
+    # Music Assistant "dashboard display" cast: same name, cannot queue music.
+    _add_ma_player(hass, "kitchen_display", "Kitchen speaker", features=131840)
     async_mock_service(hass, "music_assistant", "play_media")
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "audiomuse/info"})
