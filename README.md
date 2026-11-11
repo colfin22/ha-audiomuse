@@ -45,13 +45,15 @@ A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/Au
 
 ### Marketplace (Home Assistant 2026.11 and newer)
 
-Since 2026.11, HACS is built into Home Assistant as the **Marketplace**.
+The Marketplace replaced HACS in Home Assistant 2026.11.
 
 1. Go to **Settings → Marketplace**.
 2. In the upper-right corner, select **Add from link**, enter `https://github.com/colfin22/ha-audiomuse` and select **Add**. The Marketplace asks you to connect GitHub the first time.
-3. Install **AudioMuse-AI**, then restart Home Assistant.
+3. Find **AudioMuse-AI** in the Marketplace, select **Download**, then restart Home Assistant.
 
-### HACS (Home Assistant 2026.10 and older)
+### Home Assistant 2026.10 and older (HACS)
+
+Before 2026.11 there is no Marketplace; use HACS instead.
 
 1. In HACS, open the ⋮ menu → **Custom repositories**.
 2. Add `https://github.com/colfin22/ha-audiomuse` with the type **Integration**.
@@ -153,7 +155,7 @@ Music Assistant has its own AudioMuse-AI plugin, which provides similar tracks, 
 
 ## Development
 
-The sidebar page is written in TypeScript with [Lit](https://lit.dev) and bundled with esbuild into `custom_components/audiomuse/frontend/audiomuse-panel.js`. The bundle is committed, so HACS users need no build step, and CI checks it matches the source.
+The sidebar page is written in TypeScript with [Lit](https://lit.dev) and bundled with esbuild into `custom_components/audiomuse/frontend/audiomuse-panel.js`. The bundle is committed, so installing from the Marketplace needs no build step, and CI checks it matches the source.
 
 ```bash
 cd frontend
