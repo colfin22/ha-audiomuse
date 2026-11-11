@@ -22,6 +22,8 @@ interface Entry {
   busy_workers: number;
   available: boolean;
   ai_configured: boolean;
+  lyrics_available?: boolean;
+  lyrics_songs?: number | null;
 }
 
 interface Unavailable {
@@ -107,11 +109,11 @@ const IDEAS_SHOWN = 12;
 /**
  * The suggestions from AudioMuse-AI's own Instant Playlist page (3.7.1,
  * templates/chat.html), with the same labels and examples. Tapping one fills the
- * request box for editing; nothing runs until "Make playlist". AudioMuse-AI's
- * "Lyrics Theme" suggestion is left out: it needs lyrics analysis, and the API
- * does not report whether that is enabled.
+ * request box for editing; nothing runs until "Make playlist". "Lyrics Theme"
+ * only shows once lyrics analysis is enabled and has analysed some songs
+ * (AudioMuse-AI's own page shows it as soon as the setting is on).
  */
-export const SUGGESTIONS: ReadonlyArray<{ icon: string; label: string; text: string }> = [
+export const SUGGESTIONS: ReadonlyArray<{ icon: string; label: string; text: string; lyrics?: boolean }> = [
   { icon: "🎵", label: "Similar Song", text: "Similar to By The Way by Red Hot Chili Peppers" },
   {
     icon: "🎶",
@@ -121,6 +123,7 @@ export const SUGGESTIONS: ReadonlyArray<{ icon: string; label: string; text: str
   { icon: "👑", label: "From Artist", text: "Songs like Madonna" },
   { icon: "🤘", label: "Artists Blend", text: "Sounds like Iron Maiden and Metallica combined" },
   { icon: "🎹", label: "Sound / Vibe", text: "Calm piano songs" },
+  { icon: "📝", label: "Lyrics Theme", text: "Songs about heartbreak in the rain", lyrics: true },
   { icon: "🧠", label: "AI Brainstorming", text: "Top pop radio songs of 2025" },
   { icon: "💃", label: "Genre / Mood / Year", text: "Sad jazz from the 90s in minor key" },
   {
@@ -720,6 +723,9 @@ class AudioMusePanel extends LitElement {
     const parts = [
       entry.songs_analysed != null ? `${entry.songs_analysed.toLocaleString(this.hass?.language)} songs analysed` : null,
       entry.music_server ? `${entry.music_server}` : null,
+      entry.lyrics_available && entry.lyrics_songs
+        ? `${entry.lyrics_songs.toLocaleString(this.hass?.language)} with lyrics`
+        : null,
       entry.version ? `AudioMuse-AI ${entry.version}` : null,
       entry.busy_workers ? "analysis running" : null,
     ].filter(Boolean);
@@ -742,7 +748,7 @@ class AudioMusePanel extends LitElement {
       ></textarea>
       ${entry.ai_configured
         ? html`<div class="suggestions" role="group" aria-label="Suggestions: tap to fill the box, then edit">
-            ${SUGGESTIONS.map(
+            ${SUGGESTIONS.filter((sg) => !sg.lyrics || entry.lyrics_available).map(
               (sg) => html`<button
                 class="suggestion"
                 title=${sg.text}

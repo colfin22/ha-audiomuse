@@ -105,6 +105,19 @@ class SavedPlaylist:
     message: str
 
 
+@dataclass(frozen=True)
+class LyricsStats:
+    """Whether AudioMuse-AI's lyrics analysis is enabled, and how many songs have it."""
+
+    enabled: bool
+    songs: int
+
+    @property
+    def available(self) -> bool:
+        """Lyrics features are usable: enabled and at least one song analysed."""
+        return self.enabled and self.songs > 0
+
+
 @dataclass
 class Summary:
     """The parts of the AudioMuse-AI dashboard summary we expose."""
@@ -306,6 +319,14 @@ class AudioMuseClient:
         if not tracks:
             raise AudioMuseResponseError("AudioMuse-AI found no songs for that description")
         return tracks
+
+    async def get_lyrics_stats(self) -> LyricsStats:
+        """Lyrics analysis state (/api/lyrics/stats)."""
+        data = await self._request("GET", "/api/lyrics/stats") or {}
+        return LyricsStats(
+            enabled=bool(data.get("lyrics_enabled")),
+            songs=int(data.get("song_count") or 0),
+        )
 
     async def get_ai_provider(self) -> str | None:
         """AudioMuse-AI's own default AI provider for Instant Playlist ('NONE' when not set up)."""

@@ -233,3 +233,17 @@ async def test_no_token_sends_no_auth_header():
             await client.get_version()
             headers = next(iter(m.requests.values()))[0].kwargs["headers"]
     assert "Authorization" not in headers
+
+
+async def test_lyrics_stats(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/lyrics/stats", payload={"lyrics_enabled": True, "song_count": 420, "loaded": True})
+        stats = await client.get_lyrics_stats()
+    assert stats.enabled and stats.songs == 420 and stats.available
+
+
+async def test_lyrics_enabled_but_nothing_analysed_is_not_available(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/lyrics/stats", payload={"lyrics_enabled": True, "song_count": 0})
+        stats = await client.get_lyrics_stats()
+    assert stats.enabled and not stats.available
