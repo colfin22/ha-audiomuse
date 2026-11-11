@@ -1,5 +1,6 @@
 # AudioMuse-AI for Home Assistant
 
+[![Release](https://img.shields.io/github/v/release/colfin22/ha-audiomuse)](https://github.com/colfin22/ha-audiomuse/releases/latest)
 [![Validate](https://github.com/colfin22/ha-audiomuse/actions/workflows/validate.yml/badge.svg)](https://github.com/colfin22/ha-audiomuse/actions/workflows/validate.yml)
 [![Tests](https://github.com/colfin22/ha-audiomuse/actions/workflows/tests.yml/badge.svg)](https://github.com/colfin22/ha-audiomuse/actions/workflows/tests.yml)
 
