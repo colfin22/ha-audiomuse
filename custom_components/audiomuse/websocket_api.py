@@ -146,6 +146,8 @@ async def ws_info(hass: HomeAssistant, connection, msg) -> None:
                 "busy_workers": data.summary.busy_workers if data else 0,
                 "available": coordinator.last_update_success,
                 "ai_configured": ai_configured(entry),
+                "lyrics_available": bool(data and data.lyrics and data.lyrics.available),
+                "lyrics_songs": data.lyrics.songs if data and data.lyrics else None,
             }
         )
     connection.send_result(

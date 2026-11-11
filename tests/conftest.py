@@ -45,6 +45,22 @@ if HAS_HA:
         ) as mock:
             yield mock
 
+    @pytest.fixture(autouse=True)
+    def mock_lyrics_stats(request):
+        """Lyrics analysis is off unless a test says otherwise (not for the HTTP client tests)."""
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.audiomuse.api import LyricsStats
+
+        if request.node.path.name == "test_api.py":
+            yield None
+            return
+        with patch(
+            "custom_components.audiomuse.api.AudioMuseClient.get_lyrics_stats",
+            AsyncMock(return_value=LyricsStats(enabled=False, songs=0)),
+        ) as mock:
+            yield mock
+
 else:
     PKG_DIR = Path(__file__).resolve().parents[1] / "custom_components" / "audiomuse"
     for name, path in (("custom_components", PKG_DIR.parent), ("custom_components.audiomuse", PKG_DIR)):

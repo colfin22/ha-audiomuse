@@ -50,6 +50,13 @@ SENSORS: tuple[AudioMuseSensorDescription, ...] = (
         value_fn=lambda d: d.summary.artists,
     ),
     AudioMuseSensorDescription(
+        key="lyrics_songs",
+        translation_key="lyrics_songs",
+        state_class=SensorStateClass.TOTAL,
+        value_fn=lambda d: d.lyrics.songs if d.lyrics else None,
+        attrs_fn=lambda d: {"lyrics_enabled": d.lyrics.enabled if d.lyrics else None},
+    ),
+    AudioMuseSensorDescription(
         key="busy_workers",
         translation_key="busy_workers",
         state_class=SensorStateClass.MEASUREMENT,

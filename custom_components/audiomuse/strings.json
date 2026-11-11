@@ -66,6 +66,9 @@
       "artists": {
         "name": "Artists analysed"
       },
+      "lyrics_songs": {
+        "name": "Songs with lyrics analysed"
+      },
       "busy_workers": {
         "name": "Busy workers"
       },
