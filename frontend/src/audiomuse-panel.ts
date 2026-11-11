@@ -74,6 +74,8 @@ interface RecentItem {
   entry_id: string;
   playlist_id: string | null;
   playlist_name: string;
+  /** playlist_name without AudioMuse-AI's "_instant" suffix (older integrations don't send it). */
+  display_name?: string;
   source: "instant" | "search" | "artist" | "page";
   detail: string | null;
   track_count: number;
@@ -634,7 +636,7 @@ class AudioMusePanel extends LitElement {
         playlist_id: item.playlist_id,
         entity_id: this._player,
       });
-      this._toastRecent = `Playing ${item.playlist_name} on ${this._playerName(this._player)}`;
+      this._toastRecent = `Playing ${item.display_name ?? item.playlist_name} on ${this._playerName(this._player)}`;
     } catch (err) {
       this._toastRecent = errorText(err);
     } finally {
@@ -1020,7 +1022,7 @@ class AudioMusePanel extends LitElement {
             ${this._recent.map(
               (item) => html`<li>
                 <div class="recent-text">
-                  <span>${item.playlist_name}</span>
+                  <span>${item.display_name ?? item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
                       ? html` · ${item.source === "artist" ? "artist" : item.source === "search" ? "search" : "request"}: ${item.detail}`
