@@ -27,6 +27,10 @@ A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/Au
 |---|---|
 | ![Similar artists](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-artists.png) | ![Phone, dark theme](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-phone-dark.png) |
 
+**Suggestions:** tap one to fill the request box, then make it your own.
+
+![Suggestions pre-fill the request box](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/suggestions.png)
+
 ## Requirements
 
 - **AudioMuse-AI 3.7.1 or newer**, reachable from Home Assistant, with your library analysed. Results only cover analysed songs.
