@@ -3,7 +3,12 @@
 import random
 
 from custom_components.audiomuse.api import Track
-from custom_components.audiomuse.playlist import mix_tracks, playlist_name_from
+from custom_components.audiomuse.playlist import (
+    display_name,
+    mix_tracks,
+    playlist_name_from,
+    saved_playlist_name,
+)
 
 
 def _tracks(artist, n, prefix=None):
@@ -37,3 +42,14 @@ def test_playlist_name_from():
     name = playlist_name_from(long)
     assert len(name) <= 60 and not name.endswith(" ")
     assert playlist_name_from("   ") == "AudioMuse playlist"
+
+
+def test_saved_name_and_display_name():
+    assert saved_playlist_name(" Rainy day ") == "Rainy day_instant"
+    assert display_name("Rainy day_instant") == "Rainy day"
+    # Only one trailing suffix is removed, and only at the end.
+    assert display_name("Mix_instant_instant") == "Mix_instant"
+    assert display_name("my_instant mix") == "my_instant mix"
+    # Names without the suffix, and the bare suffix itself, are left alone.
+    assert display_name("Rainy day") == "Rainy day"
+    assert display_name("_instant") == "_instant"

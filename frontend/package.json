@@ -1,7 +1,7 @@
 {
   "name": "ha-audiomuse-frontend",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sidebar page for the AudioMuse-AI Home Assistant integration",
   "type": "module",
   "scripts": {

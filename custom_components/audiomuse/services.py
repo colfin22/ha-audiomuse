@@ -55,7 +55,7 @@ from .const import (
     SERVICE_RUN_RADIOS,
     SERVICE_SIMILAR_ARTISTS,
 )
-from .playlist import mix_tracks, playlist_name_from
+from .playlist import mix_tracks, playlist_name_from, saved_playlist_name
 from .recent import get_recent
 
 if TYPE_CHECKING:
@@ -294,8 +294,7 @@ async def async_save_and_play(
     except AudioMuseError as err:
         raise HomeAssistantError(f"Saving the playlist failed: {err}") from err
     out["playlist_id"] = saved.playlist_id
-    # AudioMuse-AI (all music-server types, checked on v3.7.1) stores it as "<name>_instant".
-    out["playlist_name"] = f"{name.strip()}_instant"
+    out["playlist_name"] = saved_playlist_name(name)
     if (recent := get_recent(hass)) is not None:
         recent.add(
             entry_id=entry.entry_id,

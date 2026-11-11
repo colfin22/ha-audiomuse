@@ -7,6 +7,21 @@ import re
 
 from .api import Track
 
+# AudioMuse-AI (all music-server types, checked on v3.7.1) saves a playlist as "<name>_instant".
+INSTANT_SUFFIX = "_instant"
+
+
+def saved_playlist_name(name: str) -> str:
+    """The name AudioMuse-AI gives a playlist it saves on the music server."""
+    return f"{name.strip()}{INSTANT_SUFFIX}"
+
+
+def display_name(playlist_name: str) -> str:
+    """A saved playlist's name without AudioMuse-AI's "_instant" suffix, for showing to people."""
+    if playlist_name.endswith(INSTANT_SUFFIX) and len(playlist_name) > len(INSTANT_SUFFIX):
+        return playlist_name[: -len(INSTANT_SUFFIX)]
+    return playlist_name
+
 
 def playlist_name_from(prompt: str, limit: int = 60) -> str:
     """A tidy playlist name from a free-text request."""

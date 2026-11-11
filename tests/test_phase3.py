@@ -99,6 +99,8 @@ async def test_saves_are_recorded_in_recent(hass, hass_ws_client, mock_client):
         ("artist", "Alice", "Alice and similar_instant", 2),
     ]
     assert all(i["playlist_id"] == "pl1" for i in items)
+    # The page shows the name without AudioMuse-AI's suffix; the real name stays as it is.
+    assert [i["display_name"] for i in items] == ["Rainy day", "Alice and similar"]
     msg = await _ws(ws, {"type": "audiomuse/recent_remove", "item_id": items[0]["id"]})
     assert msg["result"] == {"removed": True}
     msg = await _ws(ws, {"type": "audiomuse/recent"})

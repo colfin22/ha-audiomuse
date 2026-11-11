@@ -10,6 +10,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+from .playlist import display_name
 
 STORAGE_KEY = f"{DOMAIN}.recent"
 STORAGE_VERSION = 1
@@ -32,7 +33,11 @@ class RecentPlaylists:
     @callback
     def items(self, entry_id: str | None = None) -> list[dict[str, Any]]:
         """Newest first, optionally only for one AudioMuse-AI server."""
-        return [i for i in self._items if entry_id is None or i.get("entry_id") == entry_id]
+        return [
+            {**i, "display_name": display_name(i.get("playlist_name") or "")}
+            for i in self._items
+            if entry_id is None or i.get("entry_id") == entry_id
+        ]
 
     @callback
     def add(
