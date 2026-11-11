@@ -1,0 +1,26 @@
+# Dependabot version updates.
+# Security updates are switched on in the repository settings and cover every
+# ecosystem, including the pinned test requirements.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # The built page script is committed, so a frontend bump needs
+  # `npm ci && npm run build` in frontend/ before merging. The
+  # "Frontend bundle is up to date" check fails until it is rebuilt.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: monthly
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # tests/requirements.txt is left out on purpose: its pins follow
+  # Home Assistant's own package constraints.
