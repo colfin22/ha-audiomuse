@@ -103,6 +103,35 @@ type Busy = "" | "make" | "save" | "play";
 const SEARCH_DELAY_MS = 300;
 
 const IDEAS_SHOWN = 12;
+
+/**
+ * The suggestions from AudioMuse-AI's own Instant Playlist page (3.7.1,
+ * templates/chat.html), with the same labels and examples. Tapping one fills the
+ * request box for editing; nothing runs until "Make playlist". AudioMuse-AI's
+ * "Lyrics Theme" suggestion is left out: it needs lyrics analysis, and the API
+ * does not report whether that is enabled.
+ */
+export const SUGGESTIONS: ReadonlyArray<{ icon: string; label: string; text: string }> = [
+  { icon: "🎵", label: "Similar Song", text: "Similar to By The Way by Red Hot Chili Peppers" },
+  {
+    icon: "🎶",
+    label: "Multi-Song Mix",
+    text: "Similar to Red Hot Chili Peppers - By The Way and Iron Maiden - Run to the Hills",
+  },
+  { icon: "👑", label: "From Artist", text: "Songs like Madonna" },
+  { icon: "🤘", label: "Artists Blend", text: "Sounds like Iron Maiden and Metallica combined" },
+  { icon: "🎹", label: "Sound / Vibe", text: "Calm piano songs" },
+  { icon: "🧠", label: "AI Brainstorming", text: "Top pop radio songs of 2025" },
+  { icon: "💃", label: "Genre / Mood / Year", text: "Sad jazz from the 90s in minor key" },
+  {
+    icon: "🧭",
+    label: "Song Journey",
+    text: "A journey from By The Way by Red Hot Chili Peppers to Run to the Hills by Iron Maiden",
+  },
+  { icon: "🏃", label: "Tempo + Exclusion", text: "Running playlist around 170 BPM, no rap" },
+  { icon: "⏱️", label: "Time Budget", text: "One hour of chill acoustic music, one song per artist" },
+  { icon: "🆕", label: "Recently Added", text: "Songs added recently, under 4 minutes, no live versions" },
+];
 const LS_ENTRY = "audiomuse.entry";
 const LS_PLAYER = "audiomuse.player";
 
@@ -446,6 +475,20 @@ class AudioMusePanel extends LitElement {
     }
   }
 
+  /** Fill the request box with a suggestion for editing (like AudioMuse-AI's own page). */
+  private async _useSuggestion(text: string): Promise<void> {
+    this._prompt = text;
+    this._mode = "ai";
+    this._nameTouched = false;
+    this._error = "";
+    await this.updateComplete;
+    const box = this.shadowRoot?.querySelector("textarea");
+    if (box) {
+      box.focus();
+      box.setSelectionRange(text.length, text.length);
+    }
+  }
+
   private _onArtistInput(value: string): void {
     this._artistQuery = value;
     window.clearTimeout(this._searchTimer);
@@ -697,6 +740,18 @@ class AudioMusePanel extends LitElement {
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void this._make();
         }}
       ></textarea>
+      ${entry.ai_configured
+        ? html`<div class="suggestions" role="group" aria-label="Suggestions: tap to fill the box, then edit">
+            ${SUGGESTIONS.map(
+              (sg) => html`<button
+                class="suggestion"
+                title=${sg.text}
+                ?disabled=${busy}
+                @click=${() => this._useSuggestion(sg.text)}
+              ><span aria-hidden="true">${sg.icon}</span> ${sg.label}</button>`
+            )}
+          </div>`
+        : nothing}
       <div class="row">
         <div class="mode" role="radiogroup" aria-label="How to pick songs">
           <button
@@ -1119,6 +1174,19 @@ class AudioMusePanel extends LitElement {
     }
     a {
       color: var(--primary-color);
+    }
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .suggestion {
+      padding: 3px 10px;
+      font-size: 13px;
+      border-color: var(--divider-color, #ccc);
+      color: var(--primary-text-color);
+      border-radius: 14px;
     }
     .mode {
       display: inline-flex;

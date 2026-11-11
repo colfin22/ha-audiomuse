@@ -13,6 +13,7 @@ A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/Au
   - Describe what you want to hear ("dreamy synth pop for a late night drive").
   - **AI pick** lets AudioMuse-AI's AI choose the songs.
   - **Quick search** uses AudioMuse-AI's text search instead: faster, and no AI needed.
+- **Suggestions:** the same starting points as AudioMuse-AI's Instant Playlist page (Similar Song, Multi-Song Mix, From Artist, Genre / Mood / Year, Song Journey and more). Tap one to fill the request box, then edit it.
 - **Playlist ideas:** AudioMuse-AI's own suggestions. Tap one for an instant playlist.
 - **Similar artists:** search your artists, see who sounds like them, and make a mix of an artist plus the closest-sounding ones.
 - **Radios:** refresh your saved AudioMuse-AI Radios into playlists.
