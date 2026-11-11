@@ -1,0 +1,72 @@
+name: Bug or tester report
+description: Something isn't working, or you've tried it with your music server and want to report how it went.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Reports from Jellyfin, Emby and Plex users are especially welcome: playback on those servers is built but not yet tested.
+  - type: dropdown
+    id: report_type
+    attributes:
+      label: Type of report
+      options:
+        - Something isn't working
+        - Tester report (it works, or partly works)
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: music_server
+    attributes:
+      label: Music server
+      description: The media server AudioMuse-AI is connected to.
+      options:
+        - Navidrome
+        - Jellyfin
+        - Emby
+        - Plex
+        - Lyrion
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: audiomuse_version
+    attributes:
+      label: AudioMuse-AI version
+      description: Shown on the integration's version sensor and in AudioMuse-AI.
+      placeholder: "3.7.1"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.11.0"
+    validations:
+      required: true
+  - type: input
+    id: ma_version
+    attributes:
+      label: Music Assistant version
+      description: Leave empty if you don't use Music Assistant.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Anything logged by `custom_components.audiomuse` (Settings → System → Logs). Please remove tokens, passwords and addresses you don't want to share.
+      render: text
