@@ -20,6 +20,7 @@ This is a community integration, not an official AudioMuse-AI project.
 - **Playlist ideas:** AudioMuse-AI's own suggestions, under the request box. Tap one for an instant playlist.
 - **Playlist from Similar Song** (its own tab): pick a song, or a saved Song Alchemy anchor, and get a playlist of songs that sound like it. Options as on AudioMuse-AI's own page: limit songs per artist, and Radius Similarity.
 - **Similar artists** (its own tab): search your artists, choose how many similar artists to show, see a pair of songs that sound alike for each one, and make a mix of an artist plus the closest-sounding ones.
+- **Song Path** (its own tab): pick a start and an end (a song, a mood or a saved anchor) and get a playlist that moves gradually from one to the other. With lyrics analysis on, a Lyrics path follows what the songs are about as well as how they sound.
 - **Radios** (on the Song Alchemy tab): refresh your saved AudioMuse-AI Radios into playlists.
 - **Recent** (at the bottom of Make a playlist): playlists saved from Home Assistant, ready to play again.
 - **Save to library, or Save & play** on any Music Assistant speaker.
