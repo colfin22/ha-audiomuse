@@ -24,6 +24,8 @@ interface Entry {
   ai_configured: boolean;
   lyrics_available?: boolean;
   lyrics_songs?: number | null;
+  /** Album Creation needs lyrics analysis and Text Search (CLAP). */
+  album_available?: boolean;
 }
 
 interface Unavailable {
@@ -91,6 +93,40 @@ interface LyricsAxis {
 }
 type LyricsWay = "axis" | "text" | "song";
 
+interface Concepts {
+  available: boolean;
+  steps: number[];
+  default_weight: number;
+  max_terms: number;
+  categories: Array<{ id: string; label: string; terms: string[] }>;
+}
+interface Steer {
+  term: string;
+  direction: "more" | "less";
+  weight: number;
+}
+interface AlbumStats {
+  tracks: number | null;
+  minutes: number | null;
+  artists: number | null;
+  cohesion: number | null;
+}
+
+/** Concept terms named in the text, longest first, whole words only (as AudioMuse-AI's page does). */
+export function conceptsNamedIn(text: string, terms: string[]): string[] {
+  const clean = (t: string) => " " + t.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim() + " ";
+  let taken = clean(text);
+  const found: string[] = [];
+  for (const term of [...terms].sort((a, b) => b.length - a.length)) {
+    const spelled = clean(term);
+    if (spelled.trim() && taken.includes(spelled)) {
+      found.push(term);
+      taken = taken.replace(spelled, " ");
+    }
+  }
+  return found;
+}
+
 interface RecentItem {
   id: string;
   entry_id: string;
@@ -98,7 +134,7 @@ interface RecentItem {
   playlist_name: string;
   /** playlist_name without AudioMuse-AI's "_instant" suffix (older integrations don't send it). */
   display_name?: string;
-  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "lyrics" | "page";
+  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "lyrics" | "album" | "page";
   detail: string | null;
   track_count: number;
   created: string;
@@ -137,7 +173,7 @@ function newPathEnd(): PathEnd {
   return { mode: "song", query: "", results: [], searching: false, song: null, mood: "happy", anchorId: null };
 }
 
-type Tab = "make" | "song" | "artists" | "path" | "alchemy" | "lyrics";
+type Tab = "make" | "song" | "artists" | "path" | "alchemy" | "lyrics" | "album";
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "make", label: "Make a playlist" },
   { id: "song", label: "Playlist from Similar Song" },
@@ -145,12 +181,13 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "path", label: "Song Path" },
   { id: "alchemy", label: "Song Alchemy" },
   { id: "lyrics", label: "Lyrics Search" },
+  { id: "album", label: "Album Creation" },
 ];
 
 interface Result {
   tracks: Track[];
   model: string | null;
-  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "lyrics";
+  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "lyrics" | "album";
   detail: string;
   label: string;
 }
@@ -332,6 +369,15 @@ class AudioMusePanel extends LitElement {
     _lySearching: { state: true },
     _lySong: { state: true },
     _lyCount: { state: true },
+    _abSeed: { state: true },
+    _abText: { state: true },
+    _abQuery: { state: true },
+    _abResults: { state: true },
+    _abSearching: { state: true },
+    _abSong: { state: true },
+    _abConcepts: { state: true },
+    _abSteer: { state: true },
+    _abStats: { state: true },
   };
 
   declare hass?: Hass;
@@ -417,6 +463,15 @@ class AudioMusePanel extends LitElement {
   declare _lySearching: boolean;
   declare _lySong: Track | null;
   declare _lyCount: number;
+  declare _abSeed: "song" | "text";
+  declare _abText: string;
+  declare _abQuery: string;
+  declare _abResults: Track[];
+  declare _abSearching: boolean;
+  declare _abSong: Track | null;
+  declare _abConcepts: Concepts | null;
+  declare _abSteer: Steer[];
+  declare _abStats: AlbumStats | null;
 
   private _loading = false;
   private _searchTimer?: number;
@@ -429,6 +484,9 @@ class AudioMusePanel extends LitElement {
   private _alcSeq = 0;
   private _lyTimer?: number;
   private _lySeq = 0;
+  private _abTimer?: number;
+  private _abSeq = 0;
+  private _abConceptsLoading = false;
   private _ticker?: number;
 
   disconnectedCallback(): void {
@@ -440,6 +498,7 @@ class AudioMusePanel extends LitElement {
     window.clearTimeout(this._pathTimers.end);
     window.clearTimeout(this._alcTimer);
     window.clearTimeout(this._lyTimer);
+    window.clearTimeout(this._abTimer);
   }
 
   private _startTicker(): void {
@@ -533,17 +592,29 @@ class AudioMusePanel extends LitElement {
     this._lySearching = false;
     this._lySong = null;
     this._lyCount = 25;
+    this._abSeed = "text";
+    this._abText = "";
+    this._abQuery = "";
+    this._abResults = [];
+    this._abSearching = false;
+    this._abSong = null;
+    this._abConcepts = null;
+    this._abSteer = [];
+    this._abStats = null;
   }
 
   /** Tabs this server can use (Lyrics Search needs lyrics analysis). */
   private _tabsFor(entry: Entry): ReadonlyArray<{ id: Tab; label: string }> {
-    return TABS.filter((t) => t.id !== "lyrics" || entry.lyrics_available);
+    return TABS.filter(
+      (t) => (t.id !== "lyrics" || entry.lyrics_available) && (t.id !== "album" || entry.album_available)
+    );
   }
 
   private _selectTab(tab: Tab): void {
     this._tab = tab;
     localStorage.setItem(LS_TAB, tab);
     if (tab === "lyrics") void this._loadLyricsAxes();
+    if (tab === "album") void this._loadConcepts();
   }
 
   protected updated(changed: PropertyValues): void {
@@ -624,6 +695,11 @@ class AudioMusePanel extends LitElement {
     this._lySong = null;
     this._lyQuery = "";
     this._lyResults = [];
+    this._abConcepts = null;
+    this._abSteer = [];
+    this._abSong = null;
+    this._abQuery = "";
+    this._abResults = [];
     void this._loadIdeas();
     void this._loadAnchors();
     void this._loadRadios();
@@ -1254,6 +1330,84 @@ class AudioMusePanel extends LitElement {
     }
   }
 
+  private async _loadConcepts(): Promise<void> {
+    if (!this.hass || !this._entryId || this._abConcepts || this._abConceptsLoading) return;
+    this._abConceptsLoading = true;
+    try {
+      this._abConcepts = await this.hass.callWS<Concepts>({ type: "audiomuse/album_concepts", entry_id: this._entryId });
+    } catch {
+      this._abConcepts = { available: false, steps: [], default_weight: 3, max_terms: 0, categories: [] };
+    } finally {
+      this._abConceptsLoading = false;
+    }
+  }
+
+  private _onAlbumSongInput(value: string): void {
+    this._abQuery = value;
+    this._abSong = null;
+    window.clearTimeout(this._abTimer);
+    if (value.trim().length < 2) {
+      this._abResults = [];
+      this._abSearching = false;
+      return;
+    }
+    this._abTimer = window.setTimeout(async () => {
+      if (!this.hass) return;
+      const seq = ++this._abSeq;
+      this._abSearching = true;
+      try {
+        const res = await this.hass.callWS<{ tracks: Track[] }>({
+          type: "audiomuse/search_tracks",
+          entry_id: this._entryId,
+          query: value.trim(),
+        });
+        if (seq === this._abSeq) this._abResults = res.tracks.slice(0, 8);
+      } catch (err) {
+        if (seq === this._abSeq) this._error = errorText(err);
+      } finally {
+        if (seq === this._abSeq) this._abSearching = false;
+      }
+    }, SEARCH_DELAY_MS);
+  }
+
+  private _addSteer(term: string): void {
+    const c = this._abConcepts;
+    if (!term || !c || this._abSteer.some((s) => s.term === term) || this._abSteer.length >= c.max_terms) return;
+    this._abSteer = [...this._abSteer, { term, direction: "more", weight: c.default_weight }];
+  }
+
+  private async _makeAlbum(): Promise<void> {
+    if (!this.hass || this._busy) return;
+    const text = this._abText.trim();
+    const song = this._abSeed === "song" ? this._abSong : null;
+    if (!song && !(this._abSeed === "text" && text)) return;
+    const what = song ? song.title : text;
+    this._busy = "make";
+    this._resultTab = "album";
+    this._makingMode = "search";
+    this._error = "";
+    this._result = null;
+    this._saved = null;
+    this._abStats = null;
+    this._startTicker();
+    try {
+      const res = await this.hass.callWS<{ tracks: Track[]; stats: AlbumStats; name: string | null }>({
+        type: "audiomuse/album",
+        entry_id: this._entryId,
+        ...(song ? { item_id: song.item_id } : { query: text, ...(this._abSteer.length ? { steering: this._abSteer } : {}) }),
+      });
+      this._result = { tracks: res.tracks, model: null, source: "album", detail: what, label: `album: ${what}` };
+      this._abStats = res.stats;
+      this._name = res.name || nameFromPrompt(what);
+      this._nameTouched = false;
+    } catch (err) {
+      this._error = errorText(err);
+    } finally {
+      this._stopTicker();
+      this._busy = "";
+    }
+  }
+
   private async _loadRadios(): Promise<void> {
     if (!this.hass || !this._entryId) return;
     try {
@@ -1407,6 +1561,8 @@ class AudioMusePanel extends LitElement {
             ? this._renderPath(entry)
             : this._shownTab(entry) === "lyrics"
             ? this._renderLyrics(entry)
+            : this._shownTab(entry) === "album"
+            ? this._renderAlbum(entry)
             : this._renderAlchemy(entry)}
       </section>
     `;
@@ -1432,9 +1588,11 @@ class AudioMusePanel extends LitElement {
     if (this._resultTab !== tab) return nothing;
     return html`
       ${this._busy === "make"
-        ? html`<div class="working" role="status"><span class="spinner"></span>${this._makingMode === "ai"
-            ? `Asking the AI to pick songs… ${this._elapsed} s (usually 10–30 s)`
-            : `Finding songs… ${this._elapsed} s`}</div>`
+        ? html`<div class="working" role="status"><span class="spinner"></span>${tab === "album"
+            ? `Building the album… ${this._elapsed} s (usually about 10 s)`
+            : this._makingMode === "ai"
+              ? `Asking the AI to pick songs… ${this._elapsed} s (usually 10–30 s)`
+              : `Finding songs… ${this._elapsed} s`}</div>`
         : nothing}
       ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : nothing}
       ${this._result ? this._renderResult(entry) : nothing}
@@ -1988,6 +2146,157 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
+  private _renderAlbum(entry: Entry): TemplateResult {
+    if (!this._abConcepts) void this._loadConcepts();
+    const busy = this._busy !== "";
+    const c = this._abConcepts;
+    const allTerms = c ? c.categories.flatMap((cat) => cat.terms) : [];
+    const named =
+      this._abSeed === "text" ? conceptsNamedIn(this._abText, allTerms).filter((t) => !this._abSteer.some((s) => s.term === t)) : [];
+    const full = Boolean(c && this._abSteer.length >= c.max_terms);
+    const ready = this._abSeed === "song" ? Boolean(this._abSong) : Boolean(this._abText.trim());
+    const st = this._abStats;
+    return html`
+      <h2>Album Creation</h2>
+      <p class="intro">Pick a song or describe what you want, and get an album-length playlist, in an order like a real
+        album.</p>
+      <label class="end-label">Start from</label>
+      <div class="mode seed" role="radiogroup" aria-label="Start from">
+        <button role="radio" aria-checked=${this._abSeed === "song"} class=${this._abSeed === "song" ? "on" : ""}
+          @click=${() => (this._abSeed = "song")}>Song</button>
+        <button role="radio" aria-checked=${this._abSeed === "text"} class=${this._abSeed === "text" ? "on" : ""}
+          @click=${() => (this._abSeed = "text")}>Text Search</button>
+      </div>
+      ${this._abSeed === "song"
+        ? html`<input
+              class="search"
+              type="search"
+              aria-label="Song, artist or album"
+              placeholder="Song, artist or album"
+              .value=${this._abQuery}
+              @input=${(e: Event) => this._onAlbumSongInput((e.target as HTMLInputElement).value)}
+            />
+            ${this._abSearching ? html`<p class="muted">Searching…</p>` : nothing}
+            ${this._abResults.length
+              ? html`<ul class="list">
+                  ${this._abResults.map(
+                    (t) => html`<li>
+                      <button
+                        class="row-button"
+                        @click=${() => {
+                          this._abSong = t;
+                          this._abQuery = t.title;
+                          this._abResults = [];
+                        }}
+                      >
+                        <span class="artist-text"
+                          ><span>${t.title}</span><small>${t.artist}${t.album ? ` · ${t.album}` : ""}</small></span
+                        >
+                      </button>
+                    </li>`
+                  )}
+                </ul>`
+              : this._abQuery.trim().length >= 2 && !this._abSearching && !this._abSong
+                ? html`<p class="muted">No analysed song matches that.</p>`
+                : nothing}
+            ${this._abSong
+              ? html`<p class="picked">✓ <strong>${this._abSong.title}</strong>
+                  <span class="muted">${this._abSong.artist}</span></p>`
+              : nothing}
+            <p class="hint">The song stays in the album, in the place that fits it.</p>`
+        : html`<input
+              class="search"
+              aria-label="Describe the album"
+              placeholder='e.g. "folk with piano"'
+              .value=${this._abText}
+              @input=${(e: Event) => (this._abText = (e.target as HTMLInputElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") void this._makeAlbum();
+              }}
+            />
+            <p class="hint">Name a genre and an instrument, for example "jazz with trumpet" or "folk with piano".</p>
+            ${c && c.available && c.categories.length
+              ? html`<div class="refine">
+                  <p class="muted">Refine with concepts</p>
+                  ${this._abSteer.length
+                    ? html`<ul class="list steer">
+                        ${this._abSteer.map(
+                          (s) => html`<li>
+                            <span class="grow">${s.term}</span>
+                            <select
+                              aria-label=${`More or less ${s.term}`}
+                              @change=${(e: Event) =>
+                                (this._abSteer = this._abSteer.map((x) =>
+                                  x === s ? { ...x, direction: (e.target as HTMLSelectElement).value as Steer["direction"] } : x
+                                ))}
+                            >
+                              <option value="more" ?selected=${s.direction === "more"}>More</option>
+                              <option value="less" ?selected=${s.direction === "less"}>Less</option>
+                            </select>
+                            <select
+                              aria-label=${`Weight for ${s.term}`}
+                              @change=${(e: Event) =>
+                                (this._abSteer = this._abSteer.map((x) =>
+                                  x === s ? { ...x, weight: Number((e.target as HTMLSelectElement).value) } : x
+                                ))}
+                            >
+                              ${(c.steps.length ? c.steps : [c.default_weight]).map(
+                                (w) => html`<option value=${String(w)} ?selected=${w === s.weight}>×${w}</option>`
+                              )}
+                            </select>
+                            <button
+                              class="icon"
+                              aria-label=${`Remove ${s.term}`}
+                              @click=${() => (this._abSteer = this._abSteer.filter((x) => x !== s))}
+                            >×</button>
+                          </li>`
+                        )}
+                      </ul>`
+                    : html`<p class="hint">No concept added. The description alone decides the album.</p>`}
+                  ${named.length && !full
+                    ? html`<p class="hint">Your words name these concepts. Add one to weigh it above the rest of the
+                          description:</p>
+                        <div class="chips">
+                          ${named.map((t) => html`<button class="chip" @click=${() => this._addSteer(t)}>+ ${t}</button>`)}
+                        </div>`
+                    : nothing}
+                  ${full
+                    ? nothing
+                    : html`<select
+                        class="concept-picker"
+                        aria-label="Add concept"
+                        @change=${(e: Event) => {
+                          const sel = e.target as HTMLSelectElement;
+                          this._addSteer(sel.value);
+                          sel.value = "";
+                        }}
+                      >
+                        <option value="">+ Add concept</option>
+                        ${c.categories.map(
+                          (cat) => html`<optgroup label=${cat.label}>
+                            ${cat.terms
+                              .filter((t) => !this._abSteer.some((s) => s.term === t))
+                              .map((t) => html`<option value=${t}>${t}</option>`)}
+                          </optgroup>`
+                        )}
+                      </select>`}
+                </div>`
+              : nothing}`}
+      <div class="row">
+        <button class="primary" ?disabled=${busy || !ready} @click=${() => this._makeAlbum()}>Search</button>
+      </div>
+      ${this._resultTab === "album" && this._result && st
+        ? html`<div class="stats">
+            <div><b>${st.tracks ?? "—"}</b><span>Tracks</span></div>
+            <div><b>${st.minutes != null ? `${st.minutes} min` : "—"}</b><span>Length</span></div>
+            <div><b>${st.artists ?? "—"}</b><span>Artists</span></div>
+            <div><b>${st.cohesion != null ? st.cohesion.toFixed(2) : "—"}</b><span>Cohesion</span></div>
+          </div>`
+        : nothing}
+      ${this._renderOutcome("album", entry)}
+    `;
+  }
+
   private _renderArtists(entry: Entry): TemplateResult {
     const busy = this._busy !== "";
     return html`
@@ -2428,7 +2737,7 @@ class AudioMusePanel extends LitElement {
                   <span>${item.display_name ?? item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
-                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "alchemy" ? "alchemy" : item.source === "lyrics" ? "lyrics" : item.source === "search" ? "search" : "request"}: ${item.detail}`
+                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "alchemy" ? "alchemy" : item.source === "lyrics" ? "lyrics" : item.source === "album" ? "album" : item.source === "search" ? "search" : "request"}: ${item.detail}`
                       : nothing}</span
                   >
                 </div>
@@ -2569,6 +2878,52 @@ class AudioMusePanel extends LitElement {
     }
     .hint.warn {
       color: var(--warning-color, #b26a00);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .stats div {
+      background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+    .stats b {
+      display: block;
+      font-size: 18px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    @media (max-width: 600px) {
+      .stats {
+        gap: 6px;
+      }
+      .stats div {
+        padding: 8px 4px;
+      }
+      .stats b {
+        font-size: 16px;
+      }
+    }
+    .stats span {
+      font-size: 12px;
+      color: var(--secondary-text-color);
+    }
+    .refine {
+      margin-top: 12px;
+    }
+    .refine .muted {
+      margin: 0 0 4px;
+    }
+    .list.steer select {
+      padding: 4px 6px;
+      font-size: 13px;
+    }
+    .concept-picker {
+      margin-top: 8px;
     }
     .axes {
       display: grid;
