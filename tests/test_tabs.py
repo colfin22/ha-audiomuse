@@ -109,3 +109,86 @@ async def test_save_accepts_path_source(hass, hass_ws_client):
     assert msg["success"]
     msg = await _ws(ws, {"type": "audiomuse/recent", "entry_id": entry.entry_id})
     assert msg["result"]["items"][0]["source"] == "path"
+
+
+ALCHEMY_RESULT_BLEND = {"centroid": [0.1], "inclusions": [], "exclusions": [], "inclusions_embedding": None}
+
+
+async def test_alchemy_then_save_anchor_uses_the_kept_blend(hass, hass_ws_client):
+    from custom_components.audiomuse.api import AlchemyResult
+
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    with patch(
+        f"{CLIENT}.alchemy", AsyncMock(return_value=AlchemyResult(SIMILAR_SONGS, ALCHEMY_RESULT_BLEND, removed=76))
+    ) as alchemy, patch(f"{CLIENT}.save_anchor", AsyncMock(return_value={"id": 7, "name": "Calm"})) as save:
+        msg = await _ws(ws, {
+            "type": "audiomuse/alchemy", "entry_id": entry.entry_id,
+            "items": [{"type": "artist", "id": "Mogwai", "op": "include"}, {"type": "song", "id": "s9", "op": "exclude"}],
+            "count": 25, "temperature": 0.5,
+        })
+        assert msg["success"], msg
+        alchemy.assert_awaited_once_with(
+            [{"type": "artist", "id": "Mogwai", "op": "ADD"}, {"type": "song", "id": "s9", "op": "SUBTRACT"}],
+            count=25, temperature=0.5, subtract_distance=None,
+        )
+        assert [t["item_id"] for t in msg["result"]["tracks"]] == ["t1", "t2"]
+        assert msg["result"]["removed"] == 76
+        assert "centroid" not in str(msg["result"])  # the blend stays in Home Assistant
+        blend_id = msg["result"]["blend_id"]
+        msg = await _ws(ws, {"type": "audiomuse/save_anchor", "entry_id": entry.entry_id, "blend_id": blend_id, "name": "Calm"})
+    assert msg["result"] == {"anchor": {"id": 7, "name": "Calm"}}
+    save.assert_awaited_once_with("Calm", ALCHEMY_RESULT_BLEND)
+
+
+async def test_save_anchor_with_an_unknown_blend_is_a_clear_error(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {"type": "audiomuse/save_anchor", "entry_id": entry.entry_id, "blend_id": "nope", "name": "X"})
+    assert not msg["success"]
+    assert "Run Alchemy again" in msg["error"]["message"]
+
+
+async def test_rename_and_delete_anchor(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    with patch(f"{CLIENT}.rename_anchor", AsyncMock()) as rename, patch(f"{CLIENT}.delete_anchor", AsyncMock()) as delete:
+        assert (await _ws(ws, {"type": "audiomuse/rename_anchor", "entry_id": entry.entry_id, "anchor_id": 7, "name": "New"}))["success"]
+        assert (await _ws(ws, {"type": "audiomuse/delete_anchor", "entry_id": entry.entry_id, "anchor_id": 7}))["success"]
+    rename.assert_awaited_once_with(7, "New")
+    delete.assert_awaited_once_with(7)
+
+
+async def test_radios_list_includes_anchor_and_temperature(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {"type": "audiomuse/radios", "entry_id": entry.entry_id})
+    assert msg["result"]["radios"] == [
+        {"id": 1, "name": "Morning", "songs": 40, "enabled": True, "anchor_id": 9, "temperature": 0.5}
+    ]
+
+
+async def test_add_update_delete_radio(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    with patch(f"{CLIENT}.add_radio", AsyncMock()) as add, patch(f"{CLIENT}.update_radio", AsyncMock()) as update, patch(
+        f"{CLIENT}.delete_radio", AsyncMock()
+    ) as delete:
+        assert (await _ws(ws, {
+            "type": "audiomuse/add_radio", "entry_id": entry.entry_id, "anchor_id": 9, "temperature": 0.5, "songs": 40,
+        }))["success"]
+        assert (await _ws(ws, {"type": "audiomuse/update_radio", "entry_id": entry.entry_id, "radio_id": 1, "enabled": False}))["success"]
+        assert (await _ws(ws, {"type": "audiomuse/delete_radio", "entry_id": entry.entry_id, "radio_id": 1}))["success"]
+    add.assert_awaited_once_with(9, temperature=0.5, songs=40, enabled=True)
+    update.assert_awaited_once_with(1, temperature=None, songs=None, enabled=False)
+    delete.assert_awaited_once_with(1)
+
+
+async def test_save_accepts_alchemy_source(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {
+        "type": "audiomuse/save", "entry_id": entry.entry_id, "name": "Mogwai alchemy",
+        "item_ids": ["t1"], "source": "alchemy", "detail": "Mogwai",
+    })
+    assert msg["success"]

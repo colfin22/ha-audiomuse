@@ -87,6 +87,20 @@ class Artist:
 
 
 @dataclass(frozen=True)
+class AlchemyResult:
+    """Song Alchemy songs, plus the blend needed to save it as an anchor.
+
+    ``blend`` holds AudioMuse-AI's centroid and include/exclude points (lists of
+    numbers). It is only sent back to AudioMuse-AI when saving an anchor.
+    """
+
+    tracks: list[Track]
+    blend: dict[str, Any]
+    # Songs AudioMuse-AI dropped for being too near an exclude ("filtered_out").
+    removed: int = 0
+
+
+@dataclass(frozen=True)
 class MusicServer:
     """A music server configured in AudioMuse-AI (credentials are never kept)."""
 
@@ -390,6 +404,77 @@ class AudioMuseClient:
             params["path_space"] = "lyrics"
         data = await self._request("GET", "/api/find_path", params=params, timeout=AI_TIMEOUT) or {}
         return [_track(t) for t in data.get("path", [])] if isinstance(data, dict) else []
+
+    async def alchemy(
+        self,
+        items: list[dict[str, Any]],
+        count: int = 25,
+        temperature: float = 1.0,
+        subtract_distance: float | None = None,
+    ) -> AlchemyResult:
+        """Song Alchemy: blend songs and artists to include (op ADD) and exclude
+        (op SUBTRACT) into a playlist. At least one include is required."""
+        if not any(str(i.get("op", "")).upper() == "ADD" for i in items):
+            raise ValueError("Add at least one song or artist to include")
+        body: dict[str, Any] = {"items": items, "n": count, "temperature": temperature}
+        if subtract_distance is not None:
+            body["subtract_distance"] = subtract_distance
+        data = await self._request("POST", "/api/alchemy", json=body, timeout=AI_TIMEOUT) or {}
+        return AlchemyResult(
+            tracks=[_track(t) for t in data.get("results") or []],
+            blend={
+                "centroid": data.get("add_centroid_vector"),
+                "inclusions": data.get("inclusions") or [],
+                "exclusions": data.get("exclusions") or [],
+                "inclusions_embedding": data.get("inclusions_embedding"),
+            },
+            removed=len(data.get("filtered_out") or []),
+        )
+
+    async def save_anchor(self, name: str, blend: dict[str, Any]) -> dict[str, Any]:
+        """Save a Song Alchemy blend as a named anchor; returns {"id", "name"}."""
+        data = await self._request("POST", "/api/anchors", json={"name": name, **blend}) or {}
+        anchor = data.get("anchor") or {}
+        return {"id": anchor.get("id"), "name": anchor.get("name", name)}
+
+    async def rename_anchor(self, anchor_id: int, name: str) -> None:
+        """Rename a saved anchor."""
+        await self._request("PUT", f"/api/anchors/{int(anchor_id)}", json={"name": name})
+
+    async def delete_anchor(self, anchor_id: int) -> None:
+        """Delete a saved anchor. AudioMuse-AI also deletes the Radio built on it."""
+        await self._request("DELETE", f"/api/anchors/{int(anchor_id)}")
+
+    async def add_radio(
+        self, anchor_id: int, temperature: float = 1.0, songs: int = 50, enabled: bool = True
+    ) -> None:
+        """Make a Radio from an anchor (one Radio per anchor)."""
+        await self._request(
+            "POST",
+            "/api/radios",
+            json={"anchor_id": int(anchor_id), "temperature": temperature, "n_results": songs, "enabled": enabled},
+        )
+
+    async def update_radio(
+        self,
+        radio_id: int,
+        temperature: float | None = None,
+        songs: int | None = None,
+        enabled: bool | None = None,
+    ) -> None:
+        """Change a Radio's temperature, number of songs or on/off state."""
+        body: dict[str, Any] = {}
+        if temperature is not None:
+            body["temperature"] = temperature
+        if songs is not None:
+            body["n_results"] = songs
+        if enabled is not None:
+            body["enabled"] = enabled
+        await self._request("PUT", f"/api/radios/{int(radio_id)}", json=body)
+
+    async def delete_radio(self, radio_id: int) -> None:
+        """Delete a Radio (its anchor is kept)."""
+        await self._request("DELETE", f"/api/radios/{int(radio_id)}")
 
     async def get_anchors(self) -> list[dict[str, Any]]:
         """Saved Song Alchemy anchors: [{"id": int, "name": str}]."""

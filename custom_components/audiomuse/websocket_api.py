@@ -6,6 +6,8 @@ automations behave the same way.
 
 from __future__ import annotations
 
+import secrets
+from collections import OrderedDict
 from typing import Any
 
 import voluptuous as vol
@@ -60,6 +62,13 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_similar_tracks)
     websocket_api.async_register_command(hass, ws_anchors)
     websocket_api.async_register_command(hass, ws_find_path)
+    websocket_api.async_register_command(hass, ws_alchemy)
+    websocket_api.async_register_command(hass, ws_save_anchor)
+    websocket_api.async_register_command(hass, ws_rename_anchor)
+    websocket_api.async_register_command(hass, ws_delete_anchor)
+    websocket_api.async_register_command(hass, ws_add_radio)
+    websocket_api.async_register_command(hass, ws_update_radio)
+    websocket_api.async_register_command(hass, ws_delete_radio)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -214,7 +223,7 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
-        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path"]),
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path", "alchemy"]),
         vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
@@ -341,6 +350,8 @@ async def ws_radios(hass: HomeAssistant, connection, msg) -> None:
                     "name": r.get("name"),
                     "songs": r.get("n_results"),
                     "enabled": bool(r.get("enabled")),
+                    "anchor_id": r.get("anchor_id"),
+                    "temperature": r.get("temperature"),
                 }
                 for r in radios
             ]
@@ -531,5 +542,216 @@ async def ws_find_path(hass: HomeAssistant, connection, msg) -> None:
         except AudioMuseError as err:
             raise HomeAssistantError(f"Song Path failed: {err}") from err
         return {"tracks": [t.as_dict() for t in tracks]}
+
+    await _run(connection, msg, go())
+
+
+# Song Alchemy blends kept in memory so "Save Anchor" can send AudioMuse-AI the
+# full blend without the page holding hundreds of numbers. Last few only.
+_BLENDS = "audiomuse_alchemy_blends"
+_MAX_BLENDS = 10
+
+
+def _keep_blend(hass: HomeAssistant, entry_id: str, blend: dict[str, Any]) -> str:
+    blends: OrderedDict[str, tuple[str, dict[str, Any]]] = hass.data.setdefault(_BLENDS, OrderedDict())
+    blend_id = secrets.token_hex(8)
+    blends[blend_id] = (entry_id, blend)
+    while len(blends) > _MAX_BLENDS:
+        blends.popitem(last=False)
+    return blend_id
+
+
+_ALCHEMY_ITEM = vol.Schema(
+    {
+        vol.Required("type"): vol.In(["song", "artist"]),
+        vol.Required("id"): cv.string,
+        vol.Required("op"): vol.In(["include", "exclude"]),
+    }
+)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/alchemy",
+        vol.Required("entry_id"): str,
+        vol.Required("items"): vol.All([_ALCHEMY_ITEM], vol.Length(min=1, max=50)),
+        vol.Optional("count", default=25): vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT)),
+        vol.Optional("temperature", default=1.0): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
+        vol.Optional("subtract_distance"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0))),
+    }
+)
+@websocket_api.async_response
+async def ws_alchemy(hass: HomeAssistant, connection, msg) -> None:
+    """Song Alchemy: blend songs/artists to include and exclude into a playlist."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        items = [
+            {"type": i["type"], "id": i["id"], "op": "ADD" if i["op"] == "include" else "SUBTRACT"}
+            for i in msg["items"]
+        ]
+        try:
+            result = await entry.runtime_data.client.alchemy(
+                items,
+                count=msg["count"],
+                temperature=msg["temperature"],
+                subtract_distance=msg.get("subtract_distance"),
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Song Alchemy failed: {err}") from err
+        blend_id = _keep_blend(hass, entry.entry_id, result.blend) if result.blend.get("centroid") else None
+        return {"tracks": [t.as_dict() for t in result.tracks], "blend_id": blend_id, "removed": result.removed}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/save_anchor",
+        vol.Required("entry_id"): str,
+        vol.Required("blend_id"): str,
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=100)),
+    }
+)
+@websocket_api.async_response
+async def ws_save_anchor(hass: HomeAssistant, connection, msg) -> None:
+    """Save the blend from a Song Alchemy run as a named anchor."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        kept = hass.data.get(_BLENDS, {}).get(msg["blend_id"])
+        if not kept or kept[0] != entry.entry_id:
+            raise HomeAssistantError("That Alchemy result has expired. Run Alchemy again, then save the anchor.")
+        try:
+            anchor = await entry.runtime_data.client.save_anchor(msg["name"].strip(), kept[1])
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Saving the anchor failed: {err}") from err
+        return {"anchor": anchor}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/rename_anchor",
+        vol.Required("entry_id"): str,
+        vol.Required("anchor_id"): vol.Coerce(int),
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=100)),
+    }
+)
+@websocket_api.async_response
+async def ws_rename_anchor(hass: HomeAssistant, connection, msg) -> None:
+    """Rename a saved anchor."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            await entry.runtime_data.client.rename_anchor(msg["anchor_id"], msg["name"].strip())
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Renaming the anchor failed: {err}") from err
+        return {}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/delete_anchor",
+        vol.Required("entry_id"): str,
+        vol.Required("anchor_id"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+async def ws_delete_anchor(hass: HomeAssistant, connection, msg) -> None:
+    """Delete a saved anchor (AudioMuse-AI also deletes its Radio)."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            await entry.runtime_data.client.delete_anchor(msg["anchor_id"])
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Deleting the anchor failed: {err}") from err
+        return {}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/add_radio",
+        vol.Required("entry_id"): str,
+        vol.Required("anchor_id"): vol.Coerce(int),
+        vol.Optional("temperature", default=1.0): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
+        vol.Optional("songs", default=50): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_COUNT)),
+        vol.Optional("enabled", default=True): cv.boolean,
+    }
+)
+@websocket_api.async_response
+async def ws_add_radio(hass: HomeAssistant, connection, msg) -> None:
+    """Make a Radio from a saved anchor."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            await entry.runtime_data.client.add_radio(
+                msg["anchor_id"], temperature=msg["temperature"], songs=msg["songs"], enabled=msg["enabled"]
+            )
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Adding the Radio failed: {err}") from err
+        return {}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/update_radio",
+        vol.Required("entry_id"): str,
+        vol.Required("radio_id"): vol.Coerce(int),
+        vol.Optional("temperature"): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
+        vol.Optional("songs"): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_COUNT)),
+        vol.Optional("enabled"): cv.boolean,
+    }
+)
+@websocket_api.async_response
+async def ws_update_radio(hass: HomeAssistant, connection, msg) -> None:
+    """Change a Radio's temperature, number of songs or on/off state."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            await entry.runtime_data.client.update_radio(
+                msg["radio_id"],
+                temperature=msg.get("temperature"),
+                songs=msg.get("songs"),
+                enabled=msg.get("enabled"),
+            )
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Changing the Radio failed: {err}") from err
+        return {}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/delete_radio",
+        vol.Required("entry_id"): str,
+        vol.Required("radio_id"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+async def ws_delete_radio(hass: HomeAssistant, connection, msg) -> None:
+    """Delete a Radio (its anchor is kept)."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            await entry.runtime_data.client.delete_radio(msg["radio_id"])
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Deleting the Radio failed: {err}") from err
+        return {}
 
     await _run(connection, msg, go())

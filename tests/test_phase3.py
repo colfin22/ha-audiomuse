@@ -90,7 +90,9 @@ async def test_radios_list_and_refresh(hass, hass_ws_client, mock_client):
     entry = await _setup(hass)
     ws = await hass_ws_client(hass)
     msg = await _ws(ws, {"type": "audiomuse/radios", "entry_id": entry.entry_id})
-    assert msg["result"]["radios"] == [{"id": 1, "name": "Morning", "songs": 40, "enabled": True}]
+    assert msg["result"]["radios"] == [
+        {"id": 1, "name": "Morning", "songs": 40, "enabled": True, "anchor_id": 9, "temperature": 0.5}
+    ]
     msg = await _ws(ws, {"type": "audiomuse/run_radios", "entry_id": entry.entry_id})
     assert msg["result"] == {"message": "done", "radios_enabled": 1, "playlists_created": 1, "failed": []}
     mock_client["run"].assert_awaited_once()
