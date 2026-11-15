@@ -142,6 +142,20 @@ class LyricsStats:
         return self.enabled and self.songs > 0
 
 
+# Text Search (CLAP) state has the same shape as the lyrics state.
+ClapStats = LyricsStats
+
+
+@dataclass(frozen=True)
+class Album:
+    """An Album Creation result: songs in album order, AudioMuse-AI's stats
+    (tracks, minutes, artists, cohesion) and its suggested name."""
+
+    tracks: list[Track]
+    stats: dict[str, Any]
+    name: str | None
+
+
 @dataclass
 class Summary:
     """The parts of the AudioMuse-AI dashboard summary we expose."""
@@ -566,6 +580,53 @@ class AudioMuseClient:
         return LyricsStats(
             enabled=bool(data.get("lyrics_enabled")),
             songs=int(data.get("song_count") or 0),
+        )
+
+    async def get_clap_stats(self) -> LyricsStats:
+        """Text Search (CLAP) state (/api/clap/stats)."""
+        data = await self._request("GET", "/api/clap/stats") or {}
+        return LyricsStats(enabled=bool(data.get("clap_enabled")), songs=int(data.get("song_count") or 0))
+
+    async def album_concepts(self) -> dict[str, Any]:
+        """Concepts for Album Creation's "Refine with concepts", grouped by category."""
+        data = await self._request("GET", "/api/clap/concepts") or {}
+        return {
+            "available": bool(data.get("available")),
+            "steps": [float(x) for x in data.get("alpha_steps") or []],
+            "default_weight": float(data.get("default_alpha") or 3.0),
+            "max_terms": int(data.get("max_terms") or 10),
+            "categories": [
+                {
+                    "id": str(c.get("category") or ""),
+                    "label": str(c.get("label") or c.get("category") or ""),
+                    "terms": [str(t["term"] if isinstance(t, dict) else t) for t in c.get("terms") or []],
+                }
+                for c in data.get("categories") or []
+                if isinstance(c, dict)
+            ],
+        }
+
+    async def create_album(
+        self,
+        item_id: str | None = None,
+        query: str | None = None,
+        steering: list[dict[str, Any]] | None = None,
+    ) -> Album:
+        """Album Creation from a song (``item_id``) or a description (``query``,
+        optionally refined with concept ``steering``)."""
+        if bool(item_id) == bool(query):
+            raise ValueError("Start from either a song or a description")
+        body: dict[str, Any] = (
+            {"seed_type": "song", "item_id": item_id} if item_id else {"seed_type": "text", "query": query}
+        )
+        if query and steering:
+            body["steering"] = steering
+        data = await self._request("POST", "/api/album_creation/generate", json=body, timeout=AI_TIMEOUT) or {}
+        stats = data.get("stats") or {}
+        return Album(
+            tracks=[_track(t) for t in data.get("tracks") or []],
+            stats={k: stats.get(k) for k in ("tracks", "minutes", "artists", "cohesion")},
+            name=data.get("suggested_name") or None,
         )
 
     async def get_ai_provider(self) -> str | None:

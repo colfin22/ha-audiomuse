@@ -231,3 +231,38 @@ async def test_save_accepts_lyrics_source(hass, hass_ws_client):
         "item_ids": ["t1"], "source": "lyrics", "detail": "leaving home",
     })
     assert msg["success"]
+
+
+async def test_album_concepts_and_create(hass, hass_ws_client):
+    from custom_components.audiomuse.api import Album
+
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    concepts = {"available": True, "steps": [3.0], "default_weight": 3.0, "max_terms": 10, "categories": []}
+    album = Album(SIMILAR_SONGS, {"tracks": 2, "minutes": 9, "artists": 2, "cohesion": 0.8}, "Folk with piano")
+    with patch(f"{CLIENT}.album_concepts", AsyncMock(return_value=concepts)), patch(
+        f"{CLIENT}.create_album", AsyncMock(return_value=album)
+    ) as create:
+        msg = await _ws(ws, {"type": "audiomuse/album_concepts", "entry_id": entry.entry_id})
+        assert msg["result"] == concepts
+        msg = await _ws(ws, {
+            "type": "audiomuse/album", "entry_id": entry.entry_id, "query": "folk with piano",
+            "steering": [{"term": "piano", "direction": "more", "weight": 3}],
+        })
+    assert msg["success"], msg
+    create.assert_awaited_once_with(
+        item_id=None, query="folk with piano", steering=[{"term": "piano", "direction": "more", "weight": 3.0}]
+    )
+    assert msg["result"]["name"] == "Folk with piano"
+    assert msg["result"]["stats"]["cohesion"] == 0.8
+    assert [t["item_id"] for t in msg["result"]["tracks"]] == ["t1", "t2"]
+
+
+async def test_save_accepts_album_source(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {
+        "type": "audiomuse/save", "entry_id": entry.entry_id, "name": "Folk with piano",
+        "item_ids": ["t1"], "source": "album", "detail": "folk with piano",
+    })
+    assert msg["success"]

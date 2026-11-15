@@ -70,3 +70,28 @@ async def test_server_without_lyrics_stats_still_loads(hass, hass_ws_client, moc
     assert entry.state is ConfigEntryState.LOADED
     entry_info = await _info(hass, hass_ws_client)
     assert entry_info["lyrics_available"] is False and entry_info["lyrics_songs"] is None
+
+
+@pytest.mark.parametrize(
+    ("lyrics", "clap", "album"),
+    [
+        (LyricsStats(enabled=True, songs=420), LyricsStats(enabled=True, songs=420), True),
+        (LyricsStats(enabled=True, songs=420), LyricsStats(enabled=False, songs=0), False),
+        (LyricsStats(enabled=False, songs=0), LyricsStats(enabled=True, songs=420), False),
+    ],
+)
+async def test_album_flag_needs_lyrics_and_text_search(hass, hass_ws_client, mock_lyrics_stats, lyrics, clap, album):
+    mock_lyrics_stats.return_value = lyrics
+    with patch(f"{CLIENT}.get_clap_stats", AsyncMock(return_value=clap)):
+        await _setup(hass)
+        entry_info = await _info(hass, hass_ws_client)
+    assert entry_info["album_available"] is album
+
+
+async def test_album_flag_off_when_text_search_stats_missing(hass, hass_ws_client, mock_lyrics_stats):
+    mock_lyrics_stats.return_value = LyricsStats(enabled=True, songs=420)
+    with patch(f"{CLIENT}.get_clap_stats", AsyncMock(side_effect=AudioMuseResponseError("not found", 404))):
+        entry = await _setup(hass)
+        entry_info = await _info(hass, hass_ws_client)
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry_info["album_available"] is False

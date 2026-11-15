@@ -494,3 +494,54 @@ async def test_lyrics_searches(client):
 async def test_lyrics_by_axes_needs_a_choice(client):
     with pytest.raises(ValueError):
         await client.lyrics_by_axes({})
+
+
+async def test_clap_stats(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/clap/stats", payload={"clap_enabled": True, "song_count": 54043, "loaded": True})
+        stats = await client.get_clap_stats()
+    assert stats.enabled and stats.songs == 54043 and stats.available
+
+
+async def test_album_concepts(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/clap/concepts", payload={
+            "available": True, "alpha_steps": [1.0, 3.0], "default_alpha": 3.0, "max_terms": 10,
+            "categories": [{"category": "instrument", "label": "Instrument", "terms": [{"term": "piano", "grounding": 0.5}]}],
+        })
+        concepts = await client.album_concepts()
+    assert concepts == {
+        "available": True, "steps": [1.0, 3.0], "default_weight": 3.0, "max_terms": 10,
+        "categories": [{"id": "instrument", "label": "Instrument", "terms": ["piano"]}],
+    }
+
+
+async def test_create_album_from_text_with_steering(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/album_creation/generate", payload={
+            "seed": {"label": "folk with piano", "type": "text"},
+            "stats": {"artists": 10, "cohesion": 0.829, "minutes": 54, "target_cohesion": 0.86, "tracks": 12},
+            "suggested_name": "Folk with piano",
+            "tracks": [{"item_id": "a1", "title": "One", "author": "A", "slot": 1, "role": "opener"}],
+        })
+        album = await client.create_album(query="folk with piano", steering=[{"term": "piano", "direction": "more", "weight": 3}])
+        sent = m.requests[("POST", aiohttp_url(f"{URL}/api/album_creation/generate"))][0].kwargs["json"]
+    assert sent == {"seed_type": "text", "query": "folk with piano", "steering": [{"term": "piano", "direction": "more", "weight": 3}]}
+    assert [t.item_id for t in album.tracks] == ["a1"]
+    assert album.name == "Folk with piano"
+    assert album.stats == {"tracks": 12, "minutes": 54, "artists": 10, "cohesion": 0.829}
+
+
+async def test_create_album_from_a_song(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/album_creation/generate", payload={"tracks": [], "stats": {}, "suggested_name": None})
+        await client.create_album(item_id="s1")
+        sent = m.requests[("POST", aiohttp_url(f"{URL}/api/album_creation/generate"))][0].kwargs["json"]
+    assert sent == {"seed_type": "song", "item_id": "s1"}
+
+
+async def test_create_album_needs_one_seed(client):
+    with pytest.raises(ValueError):
+        await client.create_album()
+    with pytest.raises(ValueError):
+        await client.create_album(item_id="s1", query="folk")

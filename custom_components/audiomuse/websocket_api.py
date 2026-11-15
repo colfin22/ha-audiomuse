@@ -71,6 +71,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_delete_radio)
     websocket_api.async_register_command(hass, ws_lyrics_axes)
     websocket_api.async_register_command(hass, ws_lyrics_search)
+    websocket_api.async_register_command(hass, ws_album_concepts)
+    websocket_api.async_register_command(hass, ws_album)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -163,6 +165,10 @@ async def ws_info(hass: HomeAssistant, connection, msg) -> None:
                 "ai_configured": ai_configured(entry),
                 "lyrics_available": bool(data and data.lyrics and data.lyrics.available),
                 "lyrics_songs": data.lyrics.songs if data and data.lyrics else None,
+                # Album Creation needs lyrics analysis and Text Search (CLAP).
+                "album_available": bool(
+                    data and data.lyrics and data.lyrics.available and data.clap and data.clap.available
+                ),
             }
         )
     connection.send_result(
@@ -225,7 +231,7 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
-        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path", "alchemy", "lyrics"]),
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path", "alchemy", "lyrics", "album"]),
         vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
@@ -806,5 +812,57 @@ async def ws_lyrics_search(hass: HomeAssistant, connection, msg) -> None:
         except AudioMuseError as err:
             raise HomeAssistantError(f"Lyrics search failed: {err}") from err
         return {"tracks": [t.as_dict() for t in tracks]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "audiomuse/album_concepts", vol.Required("entry_id"): str})
+@websocket_api.async_response
+async def ws_album_concepts(hass: HomeAssistant, connection, msg) -> None:
+    """Concepts for Album Creation's "Refine with concepts"."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            return await entry.runtime_data.client.album_concepts()
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Could not load concepts: {err}") from err
+
+    await _run(connection, msg, go())
+
+
+_STEER = vol.Schema(
+    {
+        vol.Required("term"): cv.string,
+        vol.Optional("direction", default="more"): vol.In(["more", "less"]),
+        vol.Optional("weight", default=3.0): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+    }
+)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/album",
+        vol.Required("entry_id"): str,
+        vol.Exclusive("item_id", "seed"): cv.string,
+        vol.Exclusive("query", "seed"): vol.All(cv.string, vol.Length(min=1, max=500)),
+        vol.Optional("steering"): vol.All([_STEER], vol.Length(max=20)),
+    }
+)
+@websocket_api.async_response
+async def ws_album(hass: HomeAssistant, connection, msg) -> None:
+    """Album Creation: an album-length playlist in album order, from a song or a description."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            album = await entry.runtime_data.client.create_album(
+                item_id=msg.get("item_id"), query=msg.get("query"), steering=msg.get("steering")
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Album Creation failed: {err}") from err
+        return {"tracks": [t.as_dict() for t in album.tracks], "stats": album.stats, "name": album.name}
 
     await _run(connection, msg, go())
