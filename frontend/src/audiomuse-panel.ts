@@ -69,7 +69,19 @@ interface Radio {
   name: string;
   songs: number | null;
   enabled: boolean;
+  anchor_id?: number | null;
+  temperature?: number | null;
 }
+
+/** One Song Alchemy ingredient. */
+interface AlchemyItem {
+  type: "song" | "artist";
+  id: string;
+  label: string;
+  sub: string;
+  op: "include" | "exclude";
+}
+type AlchemyPart = "mix" | "anchors" | "radios";
 
 interface RecentItem {
   id: string;
@@ -78,7 +90,7 @@ interface RecentItem {
   playlist_name: string;
   /** playlist_name without AudioMuse-AI's "_instant" suffix (older integrations don't send it). */
   display_name?: string;
-  source: "instant" | "search" | "artist" | "song" | "path" | "page";
+  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "page";
   detail: string | null;
   track_count: number;
   created: string;
@@ -129,7 +141,7 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
 interface Result {
   tracks: Track[];
   model: string | null;
-  source: "instant" | "search" | "artist" | "song" | "path";
+  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy";
   detail: string;
   label: string;
 }
@@ -284,6 +296,23 @@ class AudioMusePanel extends LitElement {
     _pathEnd: { state: true },
     _pathCount: { state: true },
     _pathExact: { state: true },
+    _alcPart: { state: true },
+    _alcItems: { state: true },
+    _alcQuery: { state: true },
+    _alcArtists: { state: true },
+    _alcSongs: { state: true },
+    _alcSearching: { state: true },
+    _alcCount: { state: true },
+    _alcTemp: { state: true },
+    _alcSubtract: { state: true },
+    _blendId: { state: true },
+    _anchorName: { state: true },
+    _alcMsg: { state: true },
+    _renaming: { state: true },
+    _newRadioAnchor: { state: true },
+    _newRadioTemp: { state: true },
+    _newRadioSongs: { state: true },
+    _alcRemoved: { state: true },
   };
 
   declare hass?: Hass;
@@ -340,6 +369,25 @@ class AudioMusePanel extends LitElement {
   declare _pathEnd: PathEnd;
   declare _pathCount: number;
   declare _pathExact: boolean;
+  declare _alcPart: AlchemyPart;
+  declare _alcItems: AlchemyItem[];
+  declare _alcQuery: string;
+  declare _alcArtists: Artist[];
+  declare _alcSongs: Track[];
+  declare _alcSearching: boolean;
+  declare _alcCount: number;
+  declare _alcTemp: number;
+  /** "" = AudioMuse-AI's own default. */
+  declare _alcSubtract: string;
+  declare _blendId: string | null;
+  declare _anchorName: string;
+  declare _alcMsg: string;
+  declare _renaming: { id: number; name: string } | null;
+  declare _newRadioAnchor: number | null;
+  declare _newRadioTemp: number;
+  declare _newRadioSongs: number;
+  /** Songs AudioMuse-AI removed for being near an exclude, on the last run. */
+  declare _alcRemoved: number;
 
   private _loading = false;
   private _searchTimer?: number;
@@ -348,6 +396,8 @@ class AudioMusePanel extends LitElement {
   private _songSeq = 0;
   private _pathTimers: Partial<Record<Side, number>> = {};
   private _pathSeq: Record<Side, number> = { start: 0, end: 0 };
+  private _alcTimer?: number;
+  private _alcSeq = 0;
   private _ticker?: number;
 
   disconnectedCallback(): void {
@@ -357,6 +407,7 @@ class AudioMusePanel extends LitElement {
     window.clearTimeout(this._songTimer);
     window.clearTimeout(this._pathTimers.start);
     window.clearTimeout(this._pathTimers.end);
+    window.clearTimeout(this._alcTimer);
   }
 
   private _startTicker(): void {
@@ -423,6 +474,23 @@ class AudioMusePanel extends LitElement {
     this._pathEnd = newPathEnd();
     this._pathCount = 25;
     this._pathExact = true;
+    this._alcPart = "mix";
+    this._alcItems = [];
+    this._alcQuery = "";
+    this._alcArtists = [];
+    this._alcSongs = [];
+    this._alcSearching = false;
+    this._alcCount = 25;
+    this._alcTemp = 1;
+    this._alcSubtract = "";
+    this._blendId = null;
+    this._anchorName = "";
+    this._alcMsg = "";
+    this._renaming = null;
+    this._newRadioAnchor = null;
+    this._newRadioTemp = 1;
+    this._newRadioSongs = 50;
+    this._alcRemoved = 0;
   }
 
   private _selectTab(tab: Tab): void {
@@ -474,6 +542,7 @@ class AudioMusePanel extends LitElement {
     this._count = entry.default_count;
     this._songCount = entry.default_count;
     this._pathCount = entry.default_count;
+    this._alcCount = entry.default_count;
     this._mode = entry.ai_configured ? "ai" : "search";
     const players = this._info.players.map((p) => p.entity_id);
     const remembered = localStorage.getItem(LS_PLAYER);
@@ -497,6 +566,10 @@ class AudioMusePanel extends LitElement {
     this._anchorId = null;
     this._pathStart = newPathEnd();
     this._pathEnd = newPathEnd();
+    this._alcItems = [];
+    this._alcQuery = "";
+    this._blendId = null;
+    this._alcMsg = "";
     void this._loadIdeas();
     void this._loadAnchors();
     void this._loadRadios();
@@ -898,6 +971,149 @@ class AudioMusePanel extends LitElement {
     }
   }
 
+  private _onAlchemyInput(value: string): void {
+    this._alcQuery = value;
+    window.clearTimeout(this._alcTimer);
+    if (value.trim().length < 2) {
+      this._alcArtists = [];
+      this._alcSongs = [];
+      this._alcSearching = false;
+      return;
+    }
+    this._alcTimer = window.setTimeout(() => void this._searchAlchemy(value.trim()), SEARCH_DELAY_MS);
+  }
+
+  /** Artists and songs for the Alchemy search box, side by side. */
+  private async _searchAlchemy(query: string): Promise<void> {
+    if (!this.hass) return;
+    const seq = ++this._alcSeq;
+    this._alcSearching = true;
+    try {
+      const [artists, songsRes] = await Promise.all([
+        this.hass.callWS<{ artists: Artist[] }>({ type: "audiomuse/search_artists", entry_id: this._entryId, query }),
+        this.hass.callWS<{ tracks: Track[] }>({ type: "audiomuse/search_tracks", entry_id: this._entryId, query }),
+      ]);
+      if (seq !== this._alcSeq) return;
+      this._alcArtists = artists.artists.slice(0, 4);
+      this._alcSongs = songsRes.tracks.slice(0, 6);
+    } catch (err) {
+      if (seq === this._alcSeq) this._alcMsg = errorText(err);
+    } finally {
+      if (seq === this._alcSeq) this._alcSearching = false;
+    }
+  }
+
+  private _addAlchemyItem(item: AlchemyItem): void {
+    if (!this._alcItems.some((i) => i.type === item.type && i.id === item.id)) {
+      this._alcItems = [...this._alcItems, item];
+    }
+    this._alcQuery = "";
+    this._alcArtists = [];
+    this._alcSongs = [];
+  }
+
+  private async _runAlchemy(): Promise<void> {
+    const includes = this._alcItems.filter((i) => i.op === "include");
+    if (!this.hass || this._busy || !includes.length) return;
+    const what = includes.map((i) => i.label).slice(0, 3).join(" + ");
+    this._busy = "make";
+    this._resultTab = "alchemy";
+    this._makingMode = "search";
+    this._error = "";
+    this._result = null;
+    this._saved = null;
+    this._blendId = null;
+    this._alcMsg = "";
+    this._startTicker();
+    const subtract = parseFloat(this._alcSubtract);
+    try {
+      this._alcRemoved = 0;
+      const res = await this.hass.callWS<{ tracks: Track[]; blend_id: string | null; removed: number }>({
+        type: "audiomuse/alchemy",
+        entry_id: this._entryId,
+        items: this._alcItems.map(({ type, id, op }) => ({ type, id, op })),
+        count: this._alcCount,
+        temperature: this._alcTemp,
+        ...(Number.isNaN(subtract) ? {} : { subtract_distance: subtract }),
+      });
+      this._result = { tracks: res.tracks, model: null, source: "alchemy", detail: what, label: `alchemy: ${what}` };
+      this._blendId = res.blend_id;
+      this._alcRemoved = res.removed ?? 0;
+      this._name = `${what} alchemy`;
+      this._anchorName = what;
+      this._nameTouched = false;
+    } catch (err) {
+      this._error = errorText(err);
+    } finally {
+      this._stopTicker();
+      this._busy = "";
+    }
+  }
+
+  private async _saveAnchor(): Promise<void> {
+    if (!this.hass || !this._blendId || !this._anchorName.trim()) return;
+    try {
+      const res = await this.hass.callWS<{ anchor: Anchor }>({
+        type: "audiomuse/save_anchor",
+        entry_id: this._entryId,
+        blend_id: this._blendId,
+        name: this._anchorName.trim(),
+      });
+      this._alcMsg = `✓ Saved anchor "${res.anchor.name}". Use it in Playlist from Similar Song, Song Path and Radios.`;
+      void this._loadAnchors();
+    } catch (err) {
+      this._alcMsg = errorText(err);
+    }
+  }
+
+  private async _alchemyCall(msg: Record<string, unknown>, done: string): Promise<void> {
+    if (!this.hass) return;
+    this._radiosMsg = "";
+    try {
+      await this.hass.callWS({ entry_id: this._entryId, ...msg });
+      this._alcMsg = done;
+    } catch (err) {
+      this._alcMsg = errorText(err);
+    }
+    await Promise.all([this._loadAnchors(), this._loadRadios()]);
+  }
+
+  private async _renameAnchor(): Promise<void> {
+    const r = this._renaming;
+    if (!r || !r.name.trim()) return;
+    this._renaming = null;
+    await this._alchemyCall({ type: "audiomuse/rename_anchor", anchor_id: r.id, name: r.name.trim() }, `✓ Renamed to "${r.name.trim()}".`);
+  }
+
+  private async _deleteAnchor(anchor: Anchor): Promise<void> {
+    const radio = this._radios?.find((r) => r.anchor_id === anchor.id);
+    const ask = radio
+      ? `Delete the anchor "${anchor.name}"? Its Radio is deleted too. Playlists already made stay in your library.`
+      : `Delete the anchor "${anchor.name}"?`;
+    if (!window.confirm(ask)) return;
+    if (this._anchorId === anchor.id) this._anchorId = null;
+    await this._alchemyCall({ type: "audiomuse/delete_anchor", anchor_id: anchor.id }, `✓ Deleted "${anchor.name}".`);
+  }
+
+  private async _addRadio(): Promise<void> {
+    if (this._newRadioAnchor === null) return;
+    const anchor = this._anchors?.find((a) => a.id === this._newRadioAnchor);
+    await this._alchemyCall(
+      { type: "audiomuse/add_radio", anchor_id: this._newRadioAnchor, temperature: this._newRadioTemp, songs: this._newRadioSongs },
+      `✓ Added the Radio "${anchor?.name ?? ""}".`
+    );
+    this._newRadioAnchor = null;
+  }
+
+  private async _updateRadio(radio: Radio, changes: { temperature?: number; songs?: number; enabled?: boolean }): Promise<void> {
+    await this._alchemyCall({ type: "audiomuse/update_radio", radio_id: radio.id, ...changes }, `✓ Saved "${radio.name}".`);
+  }
+
+  private async _deleteRadio(radio: Radio): Promise<void> {
+    if (!window.confirm(`Delete the Radio "${radio.name}"? Its anchor is kept.`)) return;
+    await this._alchemyCall({ type: "audiomuse/delete_radio", radio_id: radio.id }, `✓ Deleted the Radio "${radio.name}".`);
+  }
+
   private async _loadRadios(): Promise<void> {
     if (!this.hass || !this._entryId) return;
     try {
@@ -913,6 +1129,7 @@ class AudioMusePanel extends LitElement {
     if (!this.hass || this._radiosBusy) return;
     this._radiosBusy = true;
     this._radiosMsg = "";
+    this._alcMsg = "";
     this._radiosError = "";
     try {
       const res = await this.hass.callWS<{ playlists_created: number | null; failed: string[] }>({
@@ -1048,8 +1265,7 @@ class AudioMusePanel extends LitElement {
             ? this._renderArtists(entry)
             : this._tab === "path"
             ? this._renderPath(entry)
-            : html`<h2>Song Alchemy</h2>
-                <div class="section first">${this._renderRadios(entry)}</div>`}
+            : this._renderAlchemy(entry)}
       </section>
     `;
   }
@@ -1616,30 +1832,320 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
-  private _renderRadios(entry: Entry): TemplateResult {
-    const enabled = (this._radios ?? []).filter((r) => r.enabled).length;
+  private _renderAlchemy(entry: Entry): TemplateResult {
+    const parts: Array<[AlchemyPart, string]> = [
+      ["mix", "Alchemy"],
+      ["anchors", "Anchors"],
+      ["radios", "Radios"],
+    ];
     return html`
-      <h3>Radios</h3>
+      <h2>Song Alchemy</h2>
+      <div class="mode seed" role="tablist" aria-label="Song Alchemy">
+        ${parts.map(
+          ([id, label]) => html`<button
+            role="tab"
+            aria-selected=${this._alcPart === id}
+            class=${this._alcPart === id ? "on" : ""}
+            @click=${() => {
+              this._alcPart = id;
+              this._alcMsg = "";
+            }}
+          >${label}</button>`
+        )}
+      </div>
+      ${this._alcPart === "mix"
+        ? this._renderAlchemyMix(entry)
+        : this._alcPart === "anchors"
+          ? this._renderAnchors()
+          : this._renderRadios()}
+      ${this._alcMsg ? html`<p class="hint" role="status">${this._alcMsg}</p>` : nothing}
+    `;
+  }
+
+  private _renderAlchemyMix(entry: Entry): TemplateResult {
+    const busy = this._busy !== "";
+    const hasInclude = this._alcItems.some((i) => i.op === "include");
+    const showResults = this._alcArtists.length || this._alcSongs.length;
+    return html`
+      <p class="intro">Pick songs or artists to include, and ones to exclude. AudioMuse-AI blends them into a
+        playlist. Exclude removes songs that sound like it; it doesn't ban the artist.</p>
+      ${this._alcItems.length
+        ? html`<ul class="list items">
+            ${this._alcItems.map(
+              (item) => html`<li>
+                <select
+                  class="ie"
+                  aria-label=${`Include or exclude ${item.label}`}
+                  @change=${(e: Event) => {
+                    const op = (e.target as HTMLSelectElement).value as AlchemyItem["op"];
+                    this._alcItems = this._alcItems.map((i) => (i === item ? { ...i, op } : i));
+                  }}
+                >
+                  <option value="include" ?selected=${item.op === "include"}>Include</option>
+                  <option value="exclude" ?selected=${item.op === "exclude"}>Exclude</option>
+                </select>
+                <span class="artist-text grow"><span>${item.label}</span><small>${item.sub}</small></span>
+                <button
+                  class="icon"
+                  aria-label=${`Remove ${item.label}`}
+                  @click=${() => (this._alcItems = this._alcItems.filter((i) => i !== item))}
+                >×</button>
+              </li>`
+            )}
+          </ul>`
+        : nothing}
+      <input
+        class="search"
+        type="search"
+        aria-label="Add a song or artist"
+        placeholder=${this._alcItems.length ? "Add another song or artist" : "Add a song or artist"}
+        .value=${this._alcQuery}
+        @input=${(e: Event) => this._onAlchemyInput((e.target as HTMLInputElement).value)}
+      />
+      ${this._alcSearching ? html`<p class="muted">Searching…</p>` : nothing}
+      ${showResults
+        ? html`<ul class="list">
+            ${this._alcArtists.map(
+              (a) => html`<li>
+                <button
+                  class="row-button"
+                  @click=${() =>
+                    this._addAlchemyItem({ type: "artist", id: a.name, label: a.name, sub: "artist", op: "include" })}
+                >
+                  <span class="artist-text"><span>${a.name}</span><small>artist</small></span
+                  ><span class="muted">${songs(a.track_count)}</span>
+                </button>
+              </li>`
+            )}
+            ${this._alcSongs.map(
+              (t) => html`<li>
+                <button
+                  class="row-button"
+                  @click=${() =>
+                    this._addAlchemyItem({
+                      type: "song",
+                      id: t.item_id,
+                      label: t.title,
+                      sub: `song · ${t.artist}`,
+                      op: "include",
+                    })}
+                >
+                  <span class="artist-text"><span>${t.title}</span><small>song · ${t.artist}${t.album
+                    ? ` · ${t.album}`
+                    : ""}</small></span>
+                </button>
+              </li>`
+            )}
+          </ul>`
+        : this._alcQuery.trim().length >= 2 && !this._alcSearching
+          ? html`<p class="muted">No analysed song or artist matches that.</p>`
+          : nothing}
+      <div class="row settings">
+        <label class="count"
+          >Number of results
+          <input
+            type="number"
+            min=${this._info!.min_count}
+            max=${this._info!.max_count}
+            .value=${String(this._alcCount)}
+            @change=${(e: Event) => {
+              const n = parseInt((e.target as HTMLInputElement).value, 10);
+              if (!Number.isNaN(n)) this._alcCount = Math.min(Math.max(n, this._info!.min_count), this._info!.max_count);
+            }}
+        /></label>
+        <label class="count"
+          >Sampling temperature (τ)
+          <input
+            type="number"
+            min="0"
+            max="10"
+            step="0.1"
+            .value=${String(this._alcTemp)}
+            @change=${(e: Event) => {
+              const n = parseFloat((e.target as HTMLInputElement).value);
+              if (!Number.isNaN(n)) this._alcTemp = Math.min(Math.max(n, 0), 10);
+            }}
+        /></label>
+        <label class="count"
+          >Subtract distance threshold
+          <input
+            type="number"
+            class="wide"
+            min="0"
+            step="0.05"
+            placeholder="default"
+            .value=${this._alcSubtract}
+            @change=${(e: Event) => (this._alcSubtract = (e.target as HTMLInputElement).value.trim())}
+        /></label>
+      </div>
+      <p class="hint">Temperature: lower sticks closer to your blend, higher explores more. Subtract distance: how
+        much near your excludes is removed (empty = AudioMuse-AI's default).</p>
+      <div class="row">
+        <button class="primary" ?disabled=${busy || !hasInclude} @click=${() => this._runAlchemy()}>Run Alchemy</button>
+      </div>
+      ${this._resultTab === "alchemy" && this._result && this._alcRemoved && this._result.tracks.length < this._alcCount
+        ? html`<p class="hint warn" role="status">
+            Your excludes removed ${songs(this._alcRemoved)}, so there are fewer than ${this._alcCount}. To keep more,
+            lower the Subtract distance threshold (for example 0.1) and run Alchemy again.
+          </p>`
+        : nothing}
+      ${this._renderOutcome("alchemy", entry)}
+      ${this._resultTab === "alchemy" && this._result && this._blendId
+        ? html`<div class="section">
+            <h3>Save Anchor</h3>
+            <p class="muted">Keep this blend to reuse in Playlist from Similar Song, Song Path and Radios.</p>
+            <div class="row">
+              <input
+                class="grow"
+                aria-label="Anchor name"
+                .value=${this._anchorName}
+                @input=${(e: Event) => (this._anchorName = (e.target as HTMLInputElement).value)}
+              />
+              <button ?disabled=${!this._anchorName.trim()} @click=${() => this._saveAnchor()}>Save Anchor</button>
+            </div>
+          </div>`
+        : nothing}
+    `;
+  }
+
+  private _renderAnchors(): TemplateResult {
+    const anchors = this._anchors ?? [];
+    return html`
+      <p class="intro">Anchors are saved Alchemy blends. Save one from an Alchemy result.</p>
+      ${this._anchors === null
+        ? html`<p class="muted">Loading…</p>`
+        : !anchors.length
+          ? html`<p class="muted">No anchors yet. Run Alchemy, then use Save Anchor under the result.</p>`
+          : html`<ul class="list">
+              ${anchors.map((a) =>
+                this._renaming?.id === a.id
+                  ? html`<li>
+                      <input
+                        class="grow"
+                        aria-label="New name"
+                        .value=${this._renaming.name}
+                        @input=${(e: Event) =>
+                          (this._renaming = { id: a.id, name: (e.target as HTMLInputElement).value })}
+                        @keydown=${(e: KeyboardEvent) => {
+                          if (e.key === "Enter") void this._renameAnchor();
+                          if (e.key === "Escape") this._renaming = null;
+                        }}
+                      />
+                      <button class="primary" @click=${() => this._renameAnchor()}>Save</button>
+                      <button @click=${() => (this._renaming = null)}>Cancel</button>
+                    </li>`
+                  : html`<li>
+                      <span class="grow">${a.name}${this._radios?.some((r) => r.anchor_id === a.id)
+                        ? html` <small class="muted">· has a Radio</small>`
+                        : nothing}</span>
+                      <button @click=${() => (this._renaming = { id: a.id, name: a.name })}>Rename</button>
+                      <button class="icon" aria-label=${`Delete ${a.name}`} @click=${() => this._deleteAnchor(a)}>×</button>
+                    </li>`
+              )}
+            </ul>`}
+    `;
+  }
+
+  private _renderRadios(): TemplateResult {
+    const radios = this._radios ?? [];
+    const enabled = radios.filter((r) => r.enabled).length;
+    const free = (this._anchors ?? []).filter((a) => !radios.some((r) => r.anchor_id === a.id));
+    const num = (e: Event) => parseFloat((e.target as HTMLInputElement).value);
+    return html`
+      <p class="intro">A radio is a saved anchor plus a temperature and a number of songs. Refreshing builds a fresh
+        playlist from each one that's on.</p>
       ${this._radiosError ? html`<p class="error">${this._radiosError}</p>` : nothing}
       ${this._radios === null && !this._radiosError ? html`<p class="muted">Loading…</p>` : nothing}
-      ${this._radios && !this._radios.length
-        ? html`<p class="muted">No Radios yet. Create them on AudioMuse-AI's
-            <a href=${`${entry.url}/alchemy`} target="_blank" rel="noreferrer">Song Alchemy</a> page, then refresh them
-            into your library from here.</p>`
+      ${this._radios && !radios.length ? html`<p class="muted">No Radios yet.</p>` : nothing}
+      ${radios.length
+        ? html`<ul class="list radios">
+            ${radios.map(
+              (r) => html`<li class=${r.enabled ? "" : "off"}>
+                <input
+                  type="checkbox"
+                  aria-label=${`${r.name} on`}
+                  .checked=${r.enabled}
+                  @change=${(e: Event) => this._updateRadio(r, { enabled: (e.target as HTMLInputElement).checked })}
+                />
+                <span class="grow">${r.name}</span>
+                <label class="count small"
+                  >τ
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    .value=${String(r.temperature ?? 1)}
+                    @change=${(e: Event) => {
+                      const n = num(e);
+                      if (!Number.isNaN(n)) void this._updateRadio(r, { temperature: Math.min(Math.max(n, 0), 10) });
+                    }}
+                /></label>
+                <label class="count small"
+                  >Songs
+                  <input
+                    type="number"
+                    min="1"
+                    max=${this._info!.max_count}
+                    .value=${String(r.songs ?? "")}
+                    @change=${(e: Event) => {
+                      const n = Math.round(num(e));
+                      if (!Number.isNaN(n)) void this._updateRadio(r, { songs: Math.min(Math.max(n, 1), this._info!.max_count) });
+                    }}
+                /></label>
+                <button class="icon" aria-label=${`Delete ${r.name}`} @click=${() => this._deleteRadio(r)}>×</button>
+              </li>`
+            )}
+          </ul>`
         : nothing}
-      ${this._radios?.length
-        ? html`<ul class="list">
-              ${this._radios.map(
-                (r) => html`<li class="radio ${r.enabled ? "" : "off"}">
-                  <span>${r.name}</span><span class="muted">${songs(r.songs)}${r.enabled ? "" : " · off"}</span>
-                </li>`
-              )}
-            </ul>
-            <div class="row">
-              <button ?disabled=${this._radiosBusy || !enabled} @click=${() => this._runRadios()}>
-                ${this._radiosBusy ? "Refreshing…" : "Refresh into library"}
-              </button>
+      <div class="section">
+        <h3>Add Radio</h3>
+        ${free.length
+          ? html`<div class="row">
+              <select
+                aria-label="Anchor for the new Radio"
+                @change=${(e: Event) => (this._newRadioAnchor = Number((e.target as HTMLSelectElement).value))}
+              >
+                <option value="" ?selected=${this._newRadioAnchor === null}>Pick an anchor…</option>
+                ${free.map((a) => html`<option value=${String(a.id)} ?selected=${a.id === this._newRadioAnchor}>${a.name}</option>`)}
+              </select>
+              <label class="count small"
+                >τ
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  .value=${String(this._newRadioTemp)}
+                  @change=${(e: Event) => {
+                    const n = num(e);
+                    if (!Number.isNaN(n)) this._newRadioTemp = Math.min(Math.max(n, 0), 10);
+                  }}
+              /></label>
+              <label class="count small"
+                >Songs
+                <input
+                  type="number"
+                  min="1"
+                  max=${this._info!.max_count}
+                  .value=${String(this._newRadioSongs)}
+                  @change=${(e: Event) => {
+                    const n = Math.round(num(e));
+                    if (!Number.isNaN(n)) this._newRadioSongs = Math.min(Math.max(n, 1), this._info!.max_count);
+                  }}
+              /></label>
+              <button ?disabled=${this._newRadioAnchor === null} @click=${() => this._addRadio()}>Add Radio</button>
             </div>`
+          : html`<p class="muted">${(this._anchors ?? []).length
+              ? "Every anchor already has a Radio. Save another anchor from Alchemy to add more."
+              : "Radios are made from anchors. Run Alchemy and save an anchor first."}</p>`}
+      </div>
+      ${radios.length
+        ? html`<div class="row">
+            <button class="primary" ?disabled=${this._radiosBusy || !enabled} @click=${() => this._runRadios()}>
+              ${this._radiosBusy ? "Refreshing…" : "Refresh into library"}
+            </button>
+          </div>`
         : nothing}
       ${this._radiosMsg ? html`<p class="hint">${this._radiosMsg}</p>` : nothing}
     `;
@@ -1657,7 +2163,7 @@ class AudioMusePanel extends LitElement {
                   <span>${item.display_name ?? item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
-                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "search" ? "search" : "request"}: ${item.detail}`
+                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "alchemy" ? "alchemy" : item.source === "search" ? "search" : "request"}: ${item.detail}`
                       : nothing}</span
                   >
                 </div>
@@ -1795,6 +2301,46 @@ class AudioMusePanel extends LitElement {
       display: block;
       color: var(--secondary-text-color);
       font-size: 12px;
+    }
+    .hint.warn {
+      color: var(--warning-color, #b26a00);
+    }
+    .items select.ie {
+      padding: 4px 6px;
+      font-size: 13px;
+      flex: none;
+    }
+    .grow {
+      flex: 1;
+      min-width: 0;
+    }
+    .row input.grow {
+      flex: 1;
+      min-width: 8em;
+    }
+    .count input.wide {
+      width: 6.5em;
+    }
+    .count.small input {
+      width: 4em;
+      margin-left: 4px;
+    }
+    .list.radios li {
+      flex-wrap: wrap;
+    }
+    .list.radios .grow {
+      min-width: 9em;
+    }
+    @media (max-width: 600px) {
+      .list.radios .grow {
+        flex-basis: calc(100% - 40px);
+      }
+      .list.radios .count.small:first-of-type {
+        margin-left: 28px;
+      }
+    }
+    .list li.off .grow {
+      opacity: 0.6;
     }
     .path-end {
       margin-bottom: 14px;

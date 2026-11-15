@@ -3,6 +3,7 @@
 import aiohttp
 import pytest
 from aioresponses import aioresponses
+from yarl import URL as aiohttp_url
 
 from custom_components.audiomuse.api import (
     AudioMuseAuthError,
@@ -375,3 +376,78 @@ async def test_find_path_mood_lyrics_and_anchor_params(client):
 async def test_find_path_rejects_combinations_audiomuse_does_not_allow(client, kwargs):
     with pytest.raises(ValueError):
         await client.find_path(**kwargs)
+
+
+ALCHEMY_ANSWER = {
+    "results": [{"item_id": "r1", "title": "Result", "author": "R", "embedding_vector": [0.0] * 200}],
+    "add_centroid_vector": [0.1, 0.2],
+    "inclusions": [{"vector": [0.1, 0.2], "weight": 1.0}],
+    "exclusions": [{"vector": [0.3, 0.4], "radius": 0.3}],
+    "inclusions_embedding": {"dimension": 2},
+    "add_points": [{"big": "map data"}],
+    "filtered_out": [{"item_id": "x1"}, {"item_id": "x2"}],
+}
+
+
+async def test_alchemy_sends_items_and_keeps_the_blend(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/alchemy", payload=ALCHEMY_ANSWER)
+        result = await client.alchemy(
+            [{"type": "artist", "id": "Mogwai", "op": "ADD"}, {"type": "song", "id": "s9", "op": "SUBTRACT"}],
+            count=25, temperature=0.5, subtract_distance=0.3,
+        )
+        sent = m.requests[("POST", aiohttp_url(f"{URL}/api/alchemy"))][0].kwargs["json"]
+    assert sent == {
+        "items": [{"type": "artist", "id": "Mogwai", "op": "ADD"}, {"type": "song", "id": "s9", "op": "SUBTRACT"}],
+        "n": 25, "temperature": 0.5, "subtract_distance": 0.3,
+    }
+    assert [t.item_id for t in result.tracks] == ["r1"]
+    assert result.removed == 2
+    assert result.blend == {
+        "centroid": [0.1, 0.2],
+        "inclusions": [{"vector": [0.1, 0.2], "weight": 1.0}],
+        "exclusions": [{"vector": [0.3, 0.4], "radius": 0.3}],
+        "inclusions_embedding": {"dimension": 2},
+    }
+
+
+async def test_alchemy_leaves_out_subtract_distance_when_not_given(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/alchemy", payload=ALCHEMY_ANSWER)
+        await client.alchemy([{"type": "song", "id": "s1", "op": "ADD"}], count=10, temperature=1.0)
+        sent = m.requests[("POST", aiohttp_url(f"{URL}/api/alchemy"))][0].kwargs["json"]
+    assert "subtract_distance" not in sent
+
+
+async def test_alchemy_needs_an_include(client):
+    with pytest.raises(ValueError):
+        await client.alchemy([{"type": "song", "id": "s1", "op": "SUBTRACT"}])
+
+
+async def test_save_rename_delete_anchor(client):
+    blend = {"centroid": [0.1], "inclusions": [], "exclusions": [], "inclusions_embedding": None}
+    with aioresponses() as m:
+        m.post(f"{URL}/api/anchors", payload={"anchor": {"id": 7, "name": "Calm"}, "dropped_points": {}})
+        m.put(f"{URL}/api/anchors/7", payload={"anchor": {"id": 7, "name": "Calmer"}})
+        m.delete(f"{URL}/api/anchors/7", payload={"deleted": True})
+        assert await client.save_anchor("Calm", blend) == {"id": 7, "name": "Calm"}
+        sent = m.requests[("POST", aiohttp_url(f"{URL}/api/anchors"))][0].kwargs["json"]
+        await client.rename_anchor(7, "Calmer")
+        renamed = m.requests[("PUT", aiohttp_url(f"{URL}/api/anchors/7"))][0].kwargs["json"]
+        await client.delete_anchor(7)
+    assert sent == {"name": "Calm", **blend}
+    assert renamed == {"name": "Calmer"}
+
+
+async def test_add_update_delete_radio(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/radios", payload={"radio": {"id": 3}})
+        m.put(f"{URL}/api/radios/3", payload={"radio": {"id": 3}})
+        m.delete(f"{URL}/api/radios/3", payload={"deleted": True})
+        await client.add_radio(7, temperature=0.5, songs=40, enabled=True)
+        added = m.requests[("POST", aiohttp_url(f"{URL}/api/radios"))][0].kwargs["json"]
+        await client.update_radio(3, enabled=False)
+        updated = m.requests[("PUT", aiohttp_url(f"{URL}/api/radios/3"))][0].kwargs["json"]
+        await client.delete_radio(3)
+    assert added == {"anchor_id": 7, "temperature": 0.5, "n_results": 40, "enabled": True}
+    assert updated == {"enabled": False}
