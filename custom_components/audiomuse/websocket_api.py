@@ -59,6 +59,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_search_tracks)
     websocket_api.async_register_command(hass, ws_similar_tracks)
     websocket_api.async_register_command(hass, ws_anchors)
+    websocket_api.async_register_command(hass, ws_find_path)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -213,7 +214,7 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
-        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song"]),
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path"]),
         vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
@@ -478,5 +479,57 @@ async def ws_anchors(hass: HomeAssistant, connection, msg) -> None:
         except AudioMuseError as err:
             raise HomeAssistantError(f"Loading anchors failed: {err}") from err
         return {"anchors": anchors}
+
+    await _run(connection, msg, go())
+
+
+_PATH_END = vol.Schema(
+    {
+        vol.Required("type"): vol.In(["song", "mood", "anchor"]),
+        vol.Required("id"): vol.Any(cv.string, vol.Coerce(int)),
+    }
+)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/find_path",
+        vol.Required("entry_id"): str,
+        vol.Required("start"): _PATH_END,
+        vol.Required("end"): _PATH_END,
+        vol.Optional("count", default=25): vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT)),
+        vol.Optional("exact", default=True): cv.boolean,
+        vol.Optional("lyrics", default=False): cv.boolean,
+    }
+)
+@websocket_api.async_response
+async def ws_find_path(hass: HomeAssistant, connection, msg) -> None:
+    """Song Path: songs moving gradually from a start (song, mood or anchor) to an end."""
+
+    def side(end: dict[str, Any], kind: str) -> Any:
+        if end["type"] != kind:
+            return None
+        return int(end["id"]) if kind == "anchor" else str(end["id"])
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        start, end = msg["start"], msg["end"]
+        try:
+            tracks = await entry.runtime_data.client.find_path(
+                start_song=side(start, "song"),
+                start_mood=side(start, "mood"),
+                start_anchor=side(start, "anchor"),
+                end_song=side(end, "song"),
+                end_mood=side(end, "mood"),
+                end_anchor=side(end, "anchor"),
+                count=msg["count"],
+                exact=msg["exact"],
+                lyrics=msg["lyrics"],
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Song Path failed: {err}") from err
+        return {"tracks": [t.as_dict() for t in tracks]}
 
     await _run(connection, msg, go())

@@ -14,6 +14,8 @@ import aiohttp
 
 DEFAULT_TIMEOUT = 30
 AI_TIMEOUT = 180
+# The moods AudioMuse-AI accepts for a Song Path end (its /api/find_path).
+PATH_MOODS = ("happy", "sad", "aggressive", "relaxed", "danceable")
 
 _PLAYLIST_ID_RE = re.compile(r"with ID:\s*(\S+?)\.?\s*$")
 
@@ -343,6 +345,51 @@ class AudioMuseClient:
             params["anchor_id"] = anchor_id
         data = await self._request("GET", "/api/similar_tracks", params=params) or []
         return [_track(t) for t in data] if isinstance(data, list) else []
+
+    async def find_path(
+        self,
+        start_song: str | None = None,
+        start_mood: str | None = None,
+        start_anchor: int | None = None,
+        end_song: str | None = None,
+        end_mood: str | None = None,
+        end_anchor: int | None = None,
+        count: int = 25,
+        exact: bool = True,
+        lyrics: bool = False,
+    ) -> list[Track]:
+        """Song Path: a playlist that moves gradually from a start to an end.
+
+        Each end is a song, a mood or a saved anchor, with AudioMuse-AI's own
+        rules: only one end may be a mood or an anchor, and a lyrics path
+        (``lyrics``) needs a song at both ends.
+        """
+        starts = [x for x in (start_song, start_mood, start_anchor) if x not in (None, "")]
+        ends = [x for x in (end_song, end_mood, end_anchor) if x not in (None, "")]
+        if len(starts) != 1 or len(ends) != 1:
+            raise ValueError("Pick one start and one end")
+        if (start_mood or start_anchor is not None) and (end_mood or end_anchor is not None):
+            raise ValueError("Only one end can be a mood or anchor; make the other a song")
+        if lyrics and not (start_song and end_song):
+            raise ValueError("A lyrics path needs a song at both ends")
+        for mood in (start_mood, end_mood):
+            if mood and mood not in PATH_MOODS:
+                raise ValueError(f"Unknown mood {mood!r}; use one of {', '.join(PATH_MOODS)}")
+        params: dict[str, Any] = {"max_steps": count, "path_fix_size": "true" if exact else "false"}
+        for key, value in (
+            ("start_song_id", start_song),
+            ("start_mood", start_mood),
+            ("start_anchor", start_anchor),
+            ("end_song_id", end_song),
+            ("end_mood", end_mood),
+            ("end_anchor", end_anchor),
+        ):
+            if value not in (None, ""):
+                params[key] = value
+        if lyrics:
+            params["path_space"] = "lyrics"
+        data = await self._request("GET", "/api/find_path", params=params, timeout=AI_TIMEOUT) or {}
+        return [_track(t) for t in data.get("path", [])] if isinstance(data, dict) else []
 
     async def get_anchors(self) -> list[dict[str, Any]]:
         """Saved Song Alchemy anchors: [{"id": int, "name": str}]."""

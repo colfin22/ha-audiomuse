@@ -78,7 +78,7 @@ interface RecentItem {
   playlist_name: string;
   /** playlist_name without AudioMuse-AI's "_instant" suffix (older integrations don't send it). */
   display_name?: string;
-  source: "instant" | "search" | "artist" | "song" | "page";
+  source: "instant" | "search" | "artist" | "song" | "path" | "page";
   detail: string | null;
   track_count: number;
   created: string;
@@ -92,18 +92,44 @@ interface Anchor {
   name: string;
 }
 
-type Tab = "make" | "song" | "artists" | "alchemy";
+/** One end of a Song Path, with AudioMuse-AI's four kinds of end. */
+type PathMode = "song" | "lyrics" | "mood" | "anchor";
+interface PathEnd {
+  mode: PathMode;
+  query: string;
+  results: Track[];
+  searching: boolean;
+  song: Track | null;
+  mood: string;
+  anchorId: number | null;
+}
+type Side = "start" | "end";
+/** The moods AudioMuse-AI's Song Path accepts (same order and names as its page). */
+const PATH_MOODS: ReadonlyArray<[string, string]> = [
+  ["happy", "Happy"],
+  ["sad", "Sad"],
+  ["aggressive", "Aggressive"],
+  ["relaxed", "Relaxed"],
+  ["danceable", "Danceable"],
+];
+
+function newPathEnd(): PathEnd {
+  return { mode: "song", query: "", results: [], searching: false, song: null, mood: "happy", anchorId: null };
+}
+
+type Tab = "make" | "song" | "artists" | "path" | "alchemy";
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "make", label: "Make a playlist" },
   { id: "song", label: "Playlist from Similar Song" },
   { id: "artists", label: "Similar artists" },
+  { id: "path", label: "Song Path" },
   { id: "alchemy", label: "Song Alchemy" },
 ];
 
 interface Result {
   tracks: Track[];
   model: string | null;
-  source: "instant" | "search" | "artist" | "song";
+  source: "instant" | "search" | "artist" | "song" | "path";
   detail: string;
   label: string;
 }
@@ -254,6 +280,10 @@ class AudioMusePanel extends LitElement {
     _songCount: { state: true },
     _limitPerArtist: { state: true },
     _radius: { state: true },
+    _pathStart: { state: true },
+    _pathEnd: { state: true },
+    _pathCount: { state: true },
+    _pathExact: { state: true },
   };
 
   declare hass?: Hass;
@@ -306,12 +336,18 @@ class AudioMusePanel extends LitElement {
   declare _songCount: number;
   declare _limitPerArtist: boolean;
   declare _radius: boolean;
+  declare _pathStart: PathEnd;
+  declare _pathEnd: PathEnd;
+  declare _pathCount: number;
+  declare _pathExact: boolean;
 
   private _loading = false;
   private _searchTimer?: number;
   private _searchSeq = 0;
   private _songTimer?: number;
   private _songSeq = 0;
+  private _pathTimers: Partial<Record<Side, number>> = {};
+  private _pathSeq: Record<Side, number> = { start: 0, end: 0 };
   private _ticker?: number;
 
   disconnectedCallback(): void {
@@ -319,6 +355,8 @@ class AudioMusePanel extends LitElement {
     window.clearInterval(this._ticker);
     window.clearTimeout(this._searchTimer);
     window.clearTimeout(this._songTimer);
+    window.clearTimeout(this._pathTimers.start);
+    window.clearTimeout(this._pathTimers.end);
   }
 
   private _startTicker(): void {
@@ -381,6 +419,10 @@ class AudioMusePanel extends LitElement {
     this._songCount = 25;
     this._limitPerArtist = true;
     this._radius = true;
+    this._pathStart = newPathEnd();
+    this._pathEnd = newPathEnd();
+    this._pathCount = 25;
+    this._pathExact = true;
   }
 
   private _selectTab(tab: Tab): void {
@@ -431,6 +473,7 @@ class AudioMusePanel extends LitElement {
     if (remember) localStorage.setItem(LS_ENTRY, entryId);
     this._count = entry.default_count;
     this._songCount = entry.default_count;
+    this._pathCount = entry.default_count;
     this._mode = entry.ai_configured ? "ai" : "search";
     const players = this._info.players.map((p) => p.entity_id);
     const remembered = localStorage.getItem(LS_PLAYER);
@@ -452,6 +495,8 @@ class AudioMusePanel extends LitElement {
     this._seedSong = null;
     this._anchors = null;
     this._anchorId = null;
+    this._pathStart = newPathEnd();
+    this._pathEnd = newPathEnd();
     void this._loadIdeas();
     void this._loadAnchors();
     void this._loadRadios();
@@ -751,6 +796,108 @@ class AudioMusePanel extends LitElement {
     }
   }
 
+  private _getEnd(side: Side): PathEnd {
+    return side === "start" ? this._pathStart : this._pathEnd;
+  }
+
+  private _setEnd(side: Side, changes: Partial<PathEnd>): void {
+    if (side === "start") this._pathStart = { ...this._pathStart, ...changes };
+    else this._pathEnd = { ...this._pathEnd, ...changes };
+  }
+
+  /**
+   * AudioMuse-AI's own rules: Lyrics on one end puts both ends on Lyrics (a
+   * lyrics path needs two songs); Mood or Anchor on one end puts the other
+   * end back to Song (only one end can be a mood or an anchor).
+   */
+  private _setPathMode(side: Side, mode: PathMode): void {
+    const other: Side = side === "start" ? "end" : "start";
+    const otherMode = this._getEnd(other).mode;
+    this._setEnd(side, { mode });
+    if (mode === "lyrics" && otherMode !== "lyrics") this._setEnd(other, { mode: "lyrics" });
+    else if (mode === "song" && otherMode === "lyrics") this._setEnd(other, { mode: "song" });
+    else if ((mode === "mood" || mode === "anchor") && otherMode !== "song") this._setEnd(other, { mode: "song" });
+    if (mode === "anchor" && this._getEnd(side).anchorId === null && this._anchors?.length) {
+      this._setEnd(side, { anchorId: this._anchors[0].id });
+    }
+  }
+
+  private _onPathInput(side: Side, value: string): void {
+    this._setEnd(side, { query: value, song: null });
+    window.clearTimeout(this._pathTimers[side]);
+    if (value.trim().length < 2) {
+      this._setEnd(side, { results: [], searching: false });
+      return;
+    }
+    this._pathTimers[side] = window.setTimeout(() => void this._searchPathSongs(side, value.trim()), SEARCH_DELAY_MS);
+  }
+
+  private async _searchPathSongs(side: Side, query: string): Promise<void> {
+    if (!this.hass) return;
+    const seq = ++this._pathSeq[side];
+    this._setEnd(side, { searching: true });
+    try {
+      const res = await this.hass.callWS<{ tracks: Track[] }>({
+        type: "audiomuse/search_tracks",
+        entry_id: this._entryId,
+        query,
+      });
+      if (seq === this._pathSeq[side]) this._setEnd(side, { results: res.tracks.slice(0, 8) });
+    } catch (err) {
+      if (seq === this._pathSeq[side]) this._error = errorText(err);
+    } finally {
+      if (seq === this._pathSeq[side]) this._setEnd(side, { searching: false });
+    }
+  }
+
+  /** What the page sends for one end, or null when it isn't chosen yet. */
+  private _pathEndValue(end: PathEnd): { type: "song" | "mood" | "anchor"; id: string | number } | null {
+    if (end.mode === "song" || end.mode === "lyrics") return end.song ? { type: "song", id: end.song.item_id } : null;
+    if (end.mode === "mood") return { type: "mood", id: end.mood };
+    const anchor = this._anchors?.find((a) => a.id === end.anchorId);
+    return anchor ? { type: "anchor", id: anchor.id } : null;
+  }
+
+  private _pathEndLabel(end: PathEnd): string {
+    if (end.mode === "song" || end.mode === "lyrics") return end.song?.title ?? "";
+    if (end.mode === "mood") return PATH_MOODS.find(([id]) => id === end.mood)?.[1] ?? end.mood;
+    return this._anchors?.find((a) => a.id === end.anchorId)?.name ?? "";
+  }
+
+  private async _findPath(): Promise<void> {
+    const start = this._pathEndValue(this._pathStart);
+    const end = this._pathEndValue(this._pathEnd);
+    if (!this.hass || this._busy || !start || !end) return;
+    const from = this._pathEndLabel(this._pathStart);
+    const to = this._pathEndLabel(this._pathEnd);
+    this._busy = "make";
+    this._resultTab = "path";
+    this._makingMode = "search";
+    this._error = "";
+    this._result = null;
+    this._saved = null;
+    this._startTicker();
+    try {
+      const res = await this.hass.callWS<{ tracks: Track[] }>({
+        type: "audiomuse/find_path",
+        entry_id: this._entryId,
+        start,
+        end,
+        count: this._pathCount,
+        exact: this._pathExact,
+        lyrics: this._pathStart.mode === "lyrics",
+      });
+      this._result = { tracks: res.tracks, model: null, source: "path", detail: `${from} → ${to}`, label: `${from} → ${to}` };
+      this._name = `${from} to ${to}`;
+      this._nameTouched = false;
+    } catch (err) {
+      this._error = errorText(err);
+    } finally {
+      this._stopTicker();
+      this._busy = "";
+    }
+  }
+
   private async _loadRadios(): Promise<void> {
     if (!this.hass || !this._entryId) return;
     try {
@@ -899,6 +1046,8 @@ class AudioMusePanel extends LitElement {
             ? this._renderSong(entry)
             : this._tab === "artists"
             ? this._renderArtists(entry)
+            : this._tab === "path"
+            ? this._renderPath(entry)
             : html`<h2>Song Alchemy</h2>
                 <div class="section first">${this._renderRadios(entry)}</div>`}
       </section>
@@ -1235,6 +1384,129 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
+  private _renderPathEnd(side: Side, entry: Entry): TemplateResult {
+    const end = this._getEnd(side);
+    const modes: Array<[PathMode, string]> = [
+      ["song", "🎵 Song"],
+      ...(entry.lyrics_available ? ([["lyrics", "📖 Lyrics"]] as Array<[PathMode, string]>) : []),
+      ["mood", "🎭 Mood"],
+      ["anchor", "🔖 Anchor"],
+    ];
+    const anchors = this._anchors ?? [];
+    return html`<div class="path-end">
+      <label class="end-label">${side === "start" ? "Start" : "End"}</label>
+      <div class="mode small" role="radiogroup" aria-label=${side === "start" ? "Start type" : "End type"}>
+        ${modes.map(
+          ([mode, label]) => html`<button
+            role="radio"
+            aria-checked=${end.mode === mode}
+            class=${end.mode === mode ? "on" : ""}
+            @click=${() => this._setPathMode(side, mode)}
+          >${label}</button>`
+        )}
+      </div>
+      ${end.mode === "song" || end.mode === "lyrics"
+        ? html`<input
+              class="search"
+              type="search"
+              aria-label=${side === "start" ? "Start song" : "End song"}
+              placeholder="Song, artist or album"
+              .value=${end.query}
+              @input=${(e: Event) => this._onPathInput(side, (e.target as HTMLInputElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter" && end.results.length) {
+                  this._setEnd(side, { song: end.results[0], query: end.results[0].title, results: [] });
+                }
+              }}
+            />
+            ${end.searching ? html`<p class="muted">Searching…</p>` : nothing}
+            ${end.results.length
+              ? html`<ul class="list">
+                  ${end.results.map(
+                    (t) => html`<li>
+                      <button
+                        class="row-button"
+                        @click=${() => this._setEnd(side, { song: t, query: t.title, results: [] })}
+                      >
+                        <span class="artist-text"
+                          ><span>${t.title}</span><small>${t.artist}${t.album ? ` · ${t.album}` : ""}</small></span
+                        >
+                      </button>
+                    </li>`
+                  )}
+                </ul>`
+              : end.query.trim().length >= 2 && !end.searching && !end.song
+                ? html`<p class="muted">No analysed song matches that.</p>`
+                : nothing}
+            ${end.song
+              ? html`<p class="picked">✓ <strong>${end.song.title}</strong>
+                  <span class="muted">${end.song.artist}${end.song.album ? ` · ${end.song.album}` : ""}</span></p>`
+              : nothing}`
+        : end.mode === "mood"
+          ? html`<select
+              class="search"
+              aria-label=${side === "start" ? "Start mood" : "End mood"}
+              .value=${end.mood}
+              @change=${(e: Event) => this._setEnd(side, { mood: (e.target as HTMLSelectElement).value })}
+            >
+              ${PATH_MOODS.map(([id, label]) => html`<option value=${id} ?selected=${id === end.mood}>${label}</option>`)}
+            </select>`
+          : anchors.length
+            ? html`<select
+                class="search"
+                aria-label=${side === "start" ? "Start anchor" : "End anchor"}
+                @change=${(e: Event) => this._setEnd(side, { anchorId: Number((e.target as HTMLSelectElement).value) })}
+              >
+                ${anchors.map(
+                  (a) => html`<option value=${String(a.id)} ?selected=${a.id === end.anchorId}>${a.name}</option>`
+                )}
+              </select>`
+            : html`<p class="muted">No anchors yet. Create them on AudioMuse-AI's
+                <a href=${`${entry.url}/alchemy`} target="_blank" rel="noreferrer">Song Alchemy</a> page.</p>`}
+    </div>`;
+  }
+
+  private _renderPath(entry: Entry): TemplateResult {
+    const busy = this._busy !== "";
+    const ready = Boolean(this._pathEndValue(this._pathStart) && this._pathEndValue(this._pathEnd));
+    return html`
+      <h2>Song Path</h2>
+      <p class="intro">Pick a start and an end, and get a playlist that moves gradually from one to the other.</p>
+      ${this._renderPathEnd("start", entry)} ${this._renderPathEnd("end", entry)}
+      ${this._pathStart.mode === "lyrics"
+        ? html`<p class="hint">Lyrics: the path follows what the songs are about as well as how they sound.</p>`
+        : nothing}
+      <div class="row">
+        <label class="count"
+          >Songs in path
+          <input
+            type="number"
+            min=${this._info!.min_count}
+            max=${this._info!.max_count}
+            .value=${String(this._pathCount)}
+            @change=${(e: Event) => {
+              const n = parseInt((e.target as HTMLInputElement).value, 10);
+              if (!Number.isNaN(n))
+                this._pathCount = Math.min(Math.max(n, this._info!.min_count), this._info!.max_count);
+            }}
+        /></label>
+      </div>
+      <label class="check">
+        <input
+          type="checkbox"
+          .checked=${this._pathExact}
+          @change=${(e: Event) => (this._pathExact = (e.target as HTMLInputElement).checked)}
+        />
+        <span>Keep path size exact<small>On: exactly that many songs. Off: the path may be shorter if there's no good
+            link.</small></span>
+      </label>
+      <div class="row">
+        <button class="primary" ?disabled=${busy || !ready} @click=${() => this._findPath()}>Find Path</button>
+      </div>
+      ${this._renderOutcome("path", entry)}
+    `;
+  }
+
   private _renderArtists(entry: Entry): TemplateResult {
     const busy = this._busy !== "";
     return html`
@@ -1385,7 +1657,7 @@ class AudioMusePanel extends LitElement {
                   <span>${item.display_name ?? item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
-                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "search" ? "search" : "request"}: ${item.detail}`
+                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "search" ? "search" : "request"}: ${item.detail}`
                       : nothing}</span
                   >
                 </div>
@@ -1523,6 +1795,20 @@ class AudioMusePanel extends LitElement {
       display: block;
       color: var(--secondary-text-color);
       font-size: 12px;
+    }
+    .path-end {
+      margin-bottom: 14px;
+    }
+    .end-label {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .mode.small button {
+      padding: 4px 12px;
+      font-size: 13px;
+    }
+    .path-end .search {
+      margin-top: 8px;
     }
     .mode.seed {
       margin-bottom: 12px;

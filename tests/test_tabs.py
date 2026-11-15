@@ -68,3 +68,44 @@ async def test_save_accepts_song_source(hass, hass_ws_client):
     assert msg["success"]
     msg = await _ws(ws, {"type": "audiomuse/recent", "entry_id": entry.entry_id})
     assert msg["result"]["items"][0]["source"] == "song"
+
+
+async def test_find_path_reaches_the_client(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    with patch(f"{CLIENT}.find_path", AsyncMock(return_value=SIMILAR_SONGS)) as path:
+        msg = await _ws(ws, {
+            "type": "audiomuse/find_path", "entry_id": entry.entry_id,
+            "start": {"type": "song", "id": "s1"}, "end": {"type": "mood", "id": "relaxed"},
+            "count": 15, "exact": False,
+        })
+    assert msg["success"], msg
+    path.assert_awaited_once_with(
+        start_song="s1", start_mood=None, start_anchor=None,
+        end_song=None, end_mood="relaxed", end_anchor=None,
+        count=15, exact=False, lyrics=False,
+    )
+    assert [t["item_id"] for t in msg["result"]["tracks"]] == ["t1", "t2"]
+
+
+async def test_find_path_bad_combination_is_a_clear_error(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {
+        "type": "audiomuse/find_path", "entry_id": entry.entry_id,
+        "start": {"type": "mood", "id": "happy"}, "end": {"type": "mood", "id": "sad"},
+    })
+    assert not msg["success"]
+    assert "mood or anchor" in msg["error"]["message"]
+
+
+async def test_save_accepts_path_source(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {
+        "type": "audiomuse/save", "entry_id": entry.entry_id, "name": "Start to End",
+        "item_ids": ["t1", "t2"], "source": "path", "detail": "Start → End",
+    })
+    assert msg["success"]
+    msg = await _ws(ws, {"type": "audiomuse/recent", "entry_id": entry.entry_id})
+    assert msg["result"]["items"][0]["source"] == "path"

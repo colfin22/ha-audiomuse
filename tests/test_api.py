@@ -325,3 +325,53 @@ async def test_anchors(client):
     with aioresponses() as m:
         m.get(f"{URL}/api/anchors", payload={"anchors": [{"id": 3, "name": "Post-rock calm"}]})
         assert await client.get_anchors() == [{"id": 3, "name": "Post-rock calm"}]
+
+
+async def test_find_path_between_two_songs(client):
+    with aioresponses() as m:
+        m.get(
+            f"{URL}/api/find_path?end_song_id=e1&max_steps=10&path_fix_size=true&start_song_id=s1",
+            payload={"path": [
+                {"item_id": "s1", "title": "Start", "author": "A", "embedding_vector": [0.1] * 200},
+                {"item_id": "e1", "title": "End", "author": "B"},
+            ], "total_distance": 0.9},
+        )
+        tracks = await client.find_path(start_song="s1", end_song="e1", count=10, exact=True)
+    assert [t.item_id for t in tracks] == ["s1", "e1"]
+    assert "embedding_vector" not in tracks[0].as_dict()
+
+
+async def test_find_path_mood_lyrics_and_anchor_params(client):
+    with aioresponses() as m:
+        m.get(
+            f"{URL}/api/find_path?end_mood=relaxed&max_steps=25&path_fix_size=false&start_song_id=s1",
+            payload={"path": []},
+        )
+        m.get(
+            f"{URL}/api/find_path?end_song_id=e1&max_steps=25&path_fix_size=true&path_space=lyrics&start_song_id=s1",
+            payload={"path": []},
+        )
+        m.get(
+            f"{URL}/api/find_path?end_song_id=e1&max_steps=25&path_fix_size=true&start_anchor=4",
+            payload={"path": []},
+        )
+        assert await client.find_path(start_song="s1", end_mood="relaxed", exact=False) == []
+        assert await client.find_path(start_song="s1", end_song="e1", lyrics=True) == []
+        assert await client.find_path(start_anchor=4, end_song="e1") == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"start_song": "s1"},  # no end
+        {"end_song": "e1"},  # no start
+        {"start_song": "s1", "start_mood": "happy", "end_song": "e1"},  # two starts
+        {"start_mood": "happy", "end_mood": "sad"},  # mood at both ends
+        {"start_anchor": 1, "end_mood": "sad"},  # mood/anchor at both ends
+        {"start_song": "s1", "end_mood": "sad", "lyrics": True},  # lyrics needs two songs
+        {"start_song": "s1", "end_mood": "sleepy"},  # not one of AudioMuse-AI's path moods
+    ],
+)
+async def test_find_path_rejects_combinations_audiomuse_does_not_allow(client, kwargs):
+    with pytest.raises(ValueError):
+        await client.find_path(**kwargs)
