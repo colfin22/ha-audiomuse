@@ -276,6 +276,7 @@ async def ws_search_artists(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("entry_id"): str,
         vol.Required("artist"): cv.string,
         vol.Optional("count", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+        vol.Optional("why", default=False): cv.boolean,
     }
 )
 @websocket_api.async_response
@@ -286,7 +287,7 @@ async def ws_similar_artists(hass: HomeAssistant, connection, msg) -> None:
         entry = _entry(hass, msg["entry_id"])
         try:
             artists = await entry.runtime_data.client.similar_artists(
-                artist=msg["artist"], count=msg["count"]
+                artist=msg["artist"], count=msg["count"], why=msg["why"]
             )
         except AudioMuseError as err:
             raise HomeAssistantError(f"Similar artists failed: {err}") from err

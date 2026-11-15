@@ -62,7 +62,9 @@ async def test_artist_search_similar_and_mix(hass, hass_ws_client, mock_client):
     entry = await _setup(hass)
     ws = await hass_ws_client(hass)
     msg = await _ws(ws, {"type": "audiomuse/search_artists", "entry_id": entry.entry_id, "query": "ali"})
-    assert msg["result"]["artists"][0] == {"name": "Alice", "artist_id": "a1", "track_count": 42, "divergence": None}
+    assert msg["result"]["artists"][0] == {
+        "name": "Alice", "artist_id": "a1", "track_count": 42, "divergence": None, "sounds_alike": None,
+    }
     msg = await _ws(ws, {"type": "audiomuse/similar_artists", "entry_id": entry.entry_id, "artist": "Alice"})
     assert [a["name"] for a in msg["result"]["artists"]] == ["Bob", "Carol"]
     msg = await _ws(ws, {"type": "audiomuse/artist_mix", "entry_id": entry.entry_id, "artist": "Alice", "count": 10})
@@ -70,6 +72,18 @@ async def test_artist_search_similar_and_mix(hass, hass_ws_client, mock_client):
     assert msg["result"]["artists"] == ["Alice", "Bob", "Carol"]
     assert {t["item_id"] for t in msg["result"]["tracks"]} == {"t1", "t2"}
     mock_client["save"].assert_not_awaited()
+
+
+async def test_similar_artists_count_and_why_reach_the_client(hass, hass_ws_client, mock_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    with patch(f"{CLIENT}.similar_artists", AsyncMock(return_value=SIMILAR)) as sim:
+        msg = await _ws(ws, {
+            "type": "audiomuse/similar_artists", "entry_id": entry.entry_id,
+            "artist": "Alice", "count": 20, "why": True,
+        })
+    assert msg["success"]
+    sim.assert_awaited_once_with(artist="Alice", count=20, why=True)
 
 
 async def test_radios_list_and_refresh(hass, hass_ws_client, mock_client):

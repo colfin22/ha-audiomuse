@@ -60,6 +60,8 @@ interface Artist {
   artist_id: string | null;
   track_count: number | null;
   divergence: number | null;
+  /** Example pair of songs that sound alike (only when "why similar" is asked for). */
+  sounds_alike?: { artist_song: string; similar_song: string } | null;
 }
 
 interface Radio {
@@ -83,6 +85,14 @@ interface RecentItem {
 }
 
 type Mode = "ai" | "search";
+
+/** The page's tabs. More arrive in later steps (issue #15). */
+type Tab = "make" | "artists" | "alchemy";
+const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
+  { id: "make", label: "Make a playlist" },
+  { id: "artists", label: "Similar artists" },
+  { id: "alchemy", label: "Song Alchemy" },
+];
 
 interface Result {
   tracks: Track[];
@@ -139,6 +149,7 @@ export const SUGGESTIONS: ReadonlyArray<{ icon: string; label: string; text: str
 ];
 const LS_ENTRY = "audiomuse.entry";
 const LS_PLAYER = "audiomuse.player";
+const LS_TAB = "audiomuse.tab";
 
 /** Same rule as the integration's playlist_name_from(), so names match automations. */
 export function nameFromPrompt(prompt: string, limit = 60): string {
@@ -222,6 +233,10 @@ class AudioMusePanel extends LitElement {
     _shownIdeas: { state: true },
     _ideasError: { state: true },
     _loadError: { state: true },
+    _tab: { state: true },
+    _resultTab: { state: true },
+    _similarCount: { state: true },
+    _why: { state: true },
   };
 
   declare hass?: Hass;
@@ -258,6 +273,11 @@ class AudioMusePanel extends LitElement {
   declare _shownIdeas: string[];
   declare _ideasError: string;
   declare _loadError: string;
+  declare _tab: Tab;
+  /** The tab whose playlist is showing in _result (and where busy/error show). */
+  declare _resultTab: Tab;
+  declare _similarCount: number;
+  declare _why: boolean;
 
   private _loading = false;
   private _searchTimer?: number;
@@ -314,6 +334,16 @@ class AudioMusePanel extends LitElement {
     this._shownIdeas = [];
     this._ideasError = "";
     this._loadError = "";
+    const tab = localStorage.getItem(LS_TAB);
+    this._tab = TABS.some((t) => t.id === tab) ? (tab as Tab) : "make";
+    this._resultTab = "make";
+    this._similarCount = 10;
+    this._why = true;
+  }
+
+  private _selectTab(tab: Tab): void {
+    this._tab = tab;
+    localStorage.setItem(LS_TAB, tab);
   }
 
   protected updated(changed: PropertyValues): void {
@@ -406,6 +436,7 @@ class AudioMusePanel extends LitElement {
     if (!text || !this.hass || this._busy) return;
     const useMode: Mode = mode ?? (this._entry?.ai_configured ? this._mode : "search");
     this._busy = "make";
+    this._resultTab = "make";
     this._makingMode = useMode;
     this._error = "";
     this._result = null;
@@ -537,7 +568,8 @@ class AudioMusePanel extends LitElement {
         type: "audiomuse/similar_artists",
         entry_id: this._entryId,
         artist: name,
-        count: 10,
+        count: this._similarCount,
+        why: this._why,
       });
       this._similar = res.artists;
     } catch (err) {
@@ -551,12 +583,12 @@ class AudioMusePanel extends LitElement {
     const artist = this._selectedArtist;
     if (!this.hass || !artist || this._busy) return;
     this._busy = "make";
+    this._resultTab = "artists";
     this._error = "";
     this._result = null;
     this._saved = null;
     this._makingMode = "search";
     this._startTicker();
-    this.shadowRoot?.querySelector(".make")?.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
       const res = await this.hass.callWS<{ artists: string[]; tracks: Track[] }>({
         type: "audiomuse/artist_mix",
@@ -707,17 +739,55 @@ class AudioMusePanel extends LitElement {
             fail. Home Assistant keeps retrying. <button class="link" @click=${() => this._reload()}>Refresh</button></div>`
         : nothing}
       ${this._renderStatus(entry)}
-      <div class="layout">
-        <div class="col main">
-          <section class="card make">${this._renderMake(entry)}</section>
-          <section class="card recent">${this._renderRecent()}</section>
-        </div>
-        <div class="col side">
-          <section class="card ideas">${this._renderIdeas()}</section>
-          <section class="card artists">${this._renderArtists()}</section>
-          <section class="card radios">${this._renderRadios(entry)}</section>
-        </div>
-      </div>
+      <nav class="tabs" role="tablist" aria-label="AudioMuse">
+        ${TABS.map(
+          (t) => html`<button
+            role="tab"
+            id=${`tab-${t.id}`}
+            class="tab ${this._tab === t.id ? "on" : ""}"
+            aria-selected=${this._tab === t.id}
+            aria-controls="tabpanel"
+            @click=${(e: Event) => {
+              this._selectTab(t.id);
+              this._scrollTabIntoView(e.currentTarget as HTMLElement);
+            }}
+          >${t.label}</button>`
+        )}
+      </nav>
+      <section class="card" id="tabpanel" role="tabpanel" aria-labelledby=${`tab-${this._tab}`}>
+        ${this._tab === "make"
+          ? html`${this._renderMake(entry)}
+              <div class="section">${this._renderIdeas()}</div>
+              <div class="section">${this._renderRecent()}</div>`
+          : this._tab === "artists"
+            ? this._renderArtists(entry)
+            : html`<h2>Song Alchemy</h2>
+                <div class="section first">${this._renderRadios(entry)}</div>`}
+      </section>
+    `;
+  }
+
+  /** Scroll only the tab bar (never the page) so the chosen tab is fully visible. */
+  private _scrollTabIntoView(tab: HTMLElement): void {
+    const bar = tab.parentElement;
+    if (!bar) return;
+    const left = tab.offsetLeft - bar.offsetLeft;
+    const right = left + tab.offsetWidth;
+    if (left < bar.scrollLeft) bar.scrollLeft = left - 8;
+    else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth + 8;
+  }
+
+  /** The working spinner, error and finished playlist for the tab that made it. */
+  private _renderOutcome(tab: Tab, entry: Entry): TemplateResult | typeof nothing {
+    if (this._resultTab !== tab) return nothing;
+    return html`
+      ${this._busy === "make"
+        ? html`<div class="working" role="status"><span class="spinner"></span>${this._makingMode === "ai"
+            ? `Asking the AI to pick songs… ${this._elapsed} s (usually 10–30 s)`
+            : `Finding songs… ${this._elapsed} s`}</div>`
+        : nothing}
+      ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : nothing}
+      ${this._result ? this._renderResult(entry) : nothing}
     `;
   }
 
@@ -731,7 +801,16 @@ class AudioMusePanel extends LitElement {
       entry.version ? `AudioMuse-AI ${entry.version}` : null,
       entry.busy_workers ? "analysis running" : null,
     ].filter(Boolean);
-    return html`<div class="status">${parts.join(" · ")}</div>`;
+    // Phones get a shorter line so it fits on one line (issue #15).
+    const short = [
+      entry.songs_analysed != null ? songs(entry.songs_analysed) : null,
+      entry.music_server ? `${entry.music_server}` : null,
+      entry.version ? `${entry.version}` : null,
+      entry.busy_workers ? "analysing" : null,
+    ].filter(Boolean);
+    return html`<div class="status">
+      <span class="long">${parts.join(" · ")}</span><span class="short">${short.join(" · ")}</span>
+    </div>`;
   }
 
   private _renderMake(entry: Entry): TemplateResult {
@@ -800,13 +879,7 @@ class AudioMusePanel extends LitElement {
             <a href=${`${entry.url}/setup`} target="_blank" rel="noreferrer">Setup Wizard</a> or in this integration's
             options. Quick search works without it.</p>`
         : nothing}
-      ${this._busy === "make"
-        ? html`<div class="working" role="status"><span class="spinner"></span>${this._makingMode === "ai"
-            ? `Asking the AI to pick songs… ${this._elapsed} s (usually 10–30 s)`
-            : `Finding songs… ${this._elapsed} s`}</div>`
-        : nothing}
-      ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : nothing}
-      ${this._result ? this._renderResult(entry) : nothing}
+      ${this._renderOutcome("make", entry)}
     `;
   }
 
@@ -894,7 +967,7 @@ class AudioMusePanel extends LitElement {
 
   private _renderIdeas(): TemplateResult {
     return html`
-      <h2>Playlist ideas</h2>
+      <h3>Playlist ideas</h3>
       <p class="muted">Suggestions from your library. Tap one for a quick playlist (no AI needed).</p>
       ${!this._ideas.length && !this._ideasError ? html`<p class="muted">Loading ideas…</p>` : nothing}
       ${this._ideasError
@@ -915,10 +988,11 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
-  private _renderArtists(): TemplateResult {
+  private _renderArtists(entry: Entry): TemplateResult {
     const busy = this._busy !== "";
     return html`
       <h2>Similar artists</h2>
+      <p class="intro">Find artists with a similar sound, then make a mix from them.</p>
       <input
         class="search"
         type="search"
@@ -930,6 +1004,36 @@ class AudioMusePanel extends LitElement {
           if (e.key === "Enter" && this._artistResults.length) void this._pickArtist(this._artistResults[0].name);
         }}
       />
+      <div class="row">
+        <label class="count"
+          >Number of similar artists
+          <input
+            type="number"
+            min="1"
+            max="50"
+            .value=${String(this._similarCount)}
+            @change=${(e: Event) => {
+              const n = parseInt((e.target as HTMLInputElement).value, 10);
+              if (Number.isNaN(n)) return;
+              this._similarCount = Math.min(Math.max(n, 1), 50);
+              if (this._selectedArtist) void this._pickArtist(this._selectedArtist);
+            }}
+        /></label>
+      </div>
+      <label class="check">
+        <input
+          type="checkbox"
+          .checked=${this._why}
+          @change=${(e: Event) => {
+            this._why = (e.target as HTMLInputElement).checked;
+            if (this._why && this._selectedArtist && this._similar?.some((a) => !a.sounds_alike)) {
+              void this._pickArtist(this._selectedArtist);
+            }
+          }}
+        />
+        <span>Show component matches (why artists are similar)
+          <small>Shows a pair of songs that sound alike for each artist.</small></span>
+      </label>
       ${this._artistSearching ? html`<p class="muted">Searching…</p>` : nothing}
       ${this._artistResults.length
         ? html`<ul class="list">
@@ -949,13 +1053,21 @@ class AudioMusePanel extends LitElement {
         ? html`
             ${this._similarLoading ? html`<p class="muted">Finding similar artists…</p>` : nothing}
             ${this._similar
-              ? html`<p class="muted">Sounds like <strong>${this._selectedArtist}</strong>:</p>
+              ? html`<p class="muted">Sounds like <strong>${this._selectedArtist}</strong>. Tap an artist to see who
+                    sounds like them.</p>
                   ${this._similar.length
                     ? html`<ul class="list similar">
                         ${this._similar.map(
                           (a, i) => html`<li class=${i < this._includeSimilar ? "included" : ""}>
                             <button class="row-button" @click=${() => this._pickArtist(a.name)}>
-                              <span>${a.name}</span><span class="muted">${songs(a.track_count)}</span>
+                              <span class="artist-text"
+                                ><span>${a.name}</span>${this._why && a.sounds_alike
+                                  ? html`<small
+                                      >"${a.sounds_alike.similar_song}" sounds like ${this._selectedArtist}'s
+                                      "${a.sounds_alike.artist_song}"</small
+                                    >`
+                                  : nothing}</span
+                              ><span class="muted">${songs(a.track_count)}</span>
                             </button>
                           </li>`
                         )}
@@ -981,13 +1093,14 @@ class AudioMusePanel extends LitElement {
               : nothing}
           `
         : nothing}
+      ${this._renderOutcome("artists", entry)}
     `;
   }
 
   private _renderRadios(entry: Entry): TemplateResult {
     const enabled = (this._radios ?? []).filter((r) => r.enabled).length;
     return html`
-      <h2>Radios</h2>
+      <h3>Radios</h3>
       ${this._radiosError ? html`<p class="error">${this._radiosError}</p>` : nothing}
       ${this._radios === null && !this._radiosError ? html`<p class="muted">Loading…</p>` : nothing}
       ${this._radios && !this._radios.length
@@ -1015,7 +1128,7 @@ class AudioMusePanel extends LitElement {
 
   private _renderRecent(): TemplateResult {
     return html`
-      <h2>Recent</h2>
+      <h3>Recent</h3>
       ${!this._recent.length
         ? html`<p class="muted">Playlists you save from Home Assistant appear here.</p>`
         : html`<ul class="list recent-list">
@@ -1085,33 +1198,84 @@ class AudioMusePanel extends LitElement {
       font-size: 14px;
       margin: 0 4px 12px;
     }
-    .layout {
+    .status .short {
+      display: none;
+    }
+    @media (max-width: 600px) {
+      .content {
+        padding: 10px;
+      }
+      .status .long {
+        display: none;
+      }
+      .status .short {
+        display: inline;
+      }
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      border-bottom: 1px solid var(--divider-color, #ddd);
+      margin-bottom: 16px;
+    }
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+    button.tab {
+      flex: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 10px 14px;
+      color: var(--secondary-text-color);
+      font-size: 15px;
+    }
+    button.tab.on {
+      color: var(--primary-color);
+      border-bottom-color: var(--primary-color);
+    }
+    #tabpanel {
+      max-width: 860px;
+    }
+    .section {
+      margin-top: 16px;
+      border-top: 1px solid var(--divider-color, #ddd);
+      padding-top: 12px;
+    }
+    .section.first {
+      margin-top: 0;
+      border-top: none;
+      padding-top: 0;
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: 500;
+      margin: 0 0 8px;
+    }
+    .intro {
+      color: var(--secondary-text-color);
+      font-size: 14px;
+      margin: -6px 0 12px;
+    }
+    .check {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--primary-text-color);
+    }
+    .check small,
+    .artist-text small {
+      display: block;
+      color: var(--secondary-text-color);
+      font-size: 12px;
+    }
+    .artist-text {
       display: flex;
       flex-direction: column;
-      gap: 16px;
-    }
-    .col {
-      display: contents;
-    }
-    /* phone order: make, ideas, artists, recent, radios */
-    .make { order: 1; }
-    .ideas { order: 2; }
-    .artists { order: 3; }
-    .recent { order: 4; }
-    .radios { order: 5; }
-    @media (min-width: 900px) {
-      .layout {
-        flex-direction: row;
-        align-items: flex-start;
-      }
-      .col {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        min-width: 0;
-      }
-      .col.main { flex: 2; }
-      .col.side { flex: 1; }
+      min-width: 0;
     }
     .search {
       width: 100%;
@@ -1145,8 +1309,12 @@ class AudioMusePanel extends LitElement {
     .row-button:hover {
       background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
     }
-    .similar li.included .row-button span:first-child {
+    .similar li.included .artist-text > span:first-child {
       font-weight: 500;
+    }
+    .row-button > .muted {
+      flex: none;
+      white-space: nowrap;
     }
     .similar li.included::before {
       content: "✓";

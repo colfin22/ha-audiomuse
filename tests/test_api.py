@@ -124,6 +124,41 @@ async def test_similar_artists_params_and_shape(client):
     assert artists[0].track_count == 30
 
 
+async def test_similar_artists_why_similar(client):
+    """With why=True AudioMuse-AI is asked for component matches, and the
+    closest pair of songs is kept as "sounds alike"."""
+    with aioresponses() as m:
+        m.get(
+            f"{URL}/api/similar_artists?artist=Alice&include_component_matches=true&n=3",
+            payload=[{
+                "artist": "Bob", "artist_id": "b1", "divergence": 0.12, "track_count": 30,
+                "component_matches": [
+                    {
+                        "artist1_representative_songs": [{"item_id": "a9", "title": "Alice Song"}],
+                        "artist2_representative_songs": [{"item_id": "b9", "title": "Bob Song"}],
+                        "distance": 0.01,
+                    },
+                    {
+                        "artist1_representative_songs": [{"item_id": "a8", "title": "Other"}],
+                        "artist2_representative_songs": [{"item_id": "b8", "title": "Other Bob"}],
+                        "distance": 0.2,
+                    },
+                ],
+            }],
+        )
+        artists = await client.similar_artists(artist="Alice", count=3, why=True)
+    assert artists[0].sounds_alike == ("Alice Song", "Bob Song")
+    assert artists[0].as_dict()["sounds_alike"] == {"artist_song": "Alice Song", "similar_song": "Bob Song"}
+
+
+async def test_similar_artists_without_why_has_no_sounds_alike(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/similar_artists?artist=Alice&n=3", payload=[{"artist": "Bob", "artist_id": "b1"}])
+        artists = await client.similar_artists(artist="Alice", count=3)
+    assert artists[0].sounds_alike is None
+    assert artists[0].as_dict()["sounds_alike"] is None
+
+
 async def test_similar_artists_needs_an_artist(client):
     with pytest.raises(ValueError):
         await client.similar_artists()

@@ -65,6 +65,9 @@ class Artist:
     artist_id: str | None
     track_count: int | None = None
     divergence: float | None = None
+    # (searched artist's song, this artist's song) from the closest component
+    # match: the "why they're similar" example. Only filled when asked for.
+    sounds_alike: tuple[str, str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly dict."""
@@ -73,6 +76,11 @@ class Artist:
             "artist_id": self.artist_id,
             "track_count": self.track_count,
             "divergence": self.divergence,
+            "sounds_alike": (
+                {"artist_song": self.sounds_alike[0], "similar_song": self.sounds_alike[1]}
+                if self.sounds_alike
+                else None
+            ),
         }
 
 
@@ -273,16 +281,23 @@ class AudioMuseClient:
         return [_artist(a) for a in data]
 
     async def similar_artists(
-        self, artist: str | None = None, artist_id: str | None = None, count: int = 10
+        self,
+        artist: str | None = None,
+        artist_id: str | None = None,
+        count: int = 10,
+        why: bool = False,
     ) -> list[Artist]:
-        """Return artists that sound similar to the given one."""
+        """Return artists that sound similar to the given one.
+
+        With ``why`` AudioMuse-AI also returns which parts of their sound match,
+        and each artist gets a ``sounds_alike`` pair of example songs.
+        """
         if not artist and not artist_id:
             raise ValueError("artist or artist_id is required")
-        data = await self._request(
-            "GET",
-            "/api/similar_artists",
-            params={"artist": artist, "artist_id": artist_id, "n": count},
-        ) or []
+        params: dict[str, Any] = {"artist": artist, "artist_id": artist_id, "n": count}
+        if why:
+            params["include_component_matches"] = "true"
+        data = await self._request("GET", "/api/similar_artists", params=params) or []
         return [_artist(a) for a in data]
 
     async def artist_tracks(
@@ -403,6 +418,21 @@ def _track(raw: dict[str, Any]) -> Track:
     )
 
 
+def _sounds_alike(matches: Any) -> tuple[str, str] | None:
+    """The closest component match as (searched artist's song, similar artist's song)."""
+    if not isinstance(matches, list):
+        return None
+    for match in sorted(
+        (m for m in matches if isinstance(m, dict)),
+        key=lambda m: m.get("distance") if isinstance(m.get("distance"), (int, float)) else float("inf"),
+    ):
+        ours = match.get("artist1_representative_songs") or []
+        theirs = match.get("artist2_representative_songs") or []
+        if ours and theirs and ours[0].get("title") and theirs[0].get("title"):
+            return (str(ours[0]["title"]), str(theirs[0]["title"]))
+    return None
+
+
 def _artist(raw: dict[str, Any]) -> Artist:
     divergence = raw.get("divergence")
     track_count = raw.get("track_count")
@@ -411,4 +441,5 @@ def _artist(raw: dict[str, Any]) -> Artist:
         artist_id=raw.get("artist_id"),
         track_count=int(track_count) if track_count is not None else None,
         divergence=float(divergence) if divergence is not None else None,
+        sounds_alike=_sounds_alike(raw.get("component_matches")),
     )
