@@ -192,3 +192,42 @@ async def test_save_accepts_alchemy_source(hass, hass_ws_client):
         "item_ids": ["t1"], "source": "alchemy", "detail": "Mogwai",
     })
     assert msg["success"]
+
+
+async def test_lyrics_axes_and_search(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    axes = [{"id": "AXIS_1_SETTING", "name": "Setting", "description": "d", "labels": []}]
+    with patch(f"{CLIENT}.lyrics_axes", AsyncMock(return_value=axes)), patch(
+        f"{CLIENT}.lyrics_by_axes", AsyncMock(return_value=SONGS)
+    ) as by_axes, patch(f"{CLIENT}.lyrics_by_text", AsyncMock(return_value=SONGS)) as by_text, patch(
+        f"{CLIENT}.lyrics_by_song", AsyncMock(return_value=SIMILAR_SONGS)
+    ) as by_song:
+        msg = await _ws(ws, {"type": "audiomuse/lyrics_axes", "entry_id": entry.entry_id})
+        assert msg["result"] == {"axes": axes}
+        base = {"type": "audiomuse/lyrics_search", "entry_id": entry.entry_id, "count": 20}
+        assert (await _ws(ws, {**base, "targets": {"AXIS_1_SETTING": "INTERIOR"}}))["success"]
+        assert (await _ws(ws, {**base, "query": "leaving home"}))["success"]
+        msg = await _ws(ws, {**base, "item_id": "s1"})
+    assert [t["item_id"] for t in msg["result"]["tracks"]] == ["t1", "t2"]
+    by_axes.assert_awaited_once_with({"AXIS_1_SETTING": "INTERIOR"}, count=20)
+    by_text.assert_awaited_once_with("leaving home", count=20)
+    by_song.assert_awaited_once_with("s1", count=20)
+
+
+async def test_lyrics_search_needs_exactly_one_way(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    base = {"type": "audiomuse/lyrics_search", "entry_id": entry.entry_id}
+    assert not (await _ws(ws, base))["success"]
+    assert not (await _ws(ws, {**base, "query": "x", "item_id": "s1"}))["success"]
+
+
+async def test_save_accepts_lyrics_source(hass, hass_ws_client):
+    entry = await _setup(hass)
+    ws = await hass_ws_client(hass)
+    msg = await _ws(ws, {
+        "type": "audiomuse/save", "entry_id": entry.entry_id, "name": "Leaving home",
+        "item_ids": ["t1"], "source": "lyrics", "detail": "leaving home",
+    })
+    assert msg["success"]

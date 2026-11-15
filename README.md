@@ -25,6 +25,7 @@ This is a community integration, not an official AudioMuse-AI project.
   - **Alchemy:** pick songs and artists to include or exclude, and get a blended playlist. Save the blend as an anchor to reuse it.
   - **Anchors:** rename or delete your saved blends.
   - **Radios:** make a Radio from an anchor, turn Radios on or off, change their temperature and number of songs, and refresh them into playlists.
+- **Lyrics Search** (its own tab, shown when lyrics analysis is on in AudioMuse-AI): find songs by what the lyrics are about. Pick values on AudioMuse-AI's lyrics axes (Setting, Social Dynamic, Emotional Valence, Narrative Temporality, Thematic Weight), describe the lyrics in your own words, or start from a song.
 - **Recent** (at the bottom of Make a playlist): playlists saved from Home Assistant, ready to play again.
 - **Save to library, or Save & play** on any Music Assistant speaker.
 - **Sensors:** songs, albums and artists analysed, busy workers, queued tasks and version.

@@ -83,6 +83,14 @@ interface AlchemyItem {
 }
 type AlchemyPart = "mix" | "anchors" | "radios";
 
+interface LyricsAxis {
+  id: string;
+  name: string;
+  description: string;
+  labels: Array<{ id: string; name: string; description: string }>;
+}
+type LyricsWay = "axis" | "text" | "song";
+
 interface RecentItem {
   id: string;
   entry_id: string;
@@ -90,7 +98,7 @@ interface RecentItem {
   playlist_name: string;
   /** playlist_name without AudioMuse-AI's "_instant" suffix (older integrations don't send it). */
   display_name?: string;
-  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "page";
+  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "lyrics" | "page";
   detail: string | null;
   track_count: number;
   created: string;
@@ -129,19 +137,20 @@ function newPathEnd(): PathEnd {
   return { mode: "song", query: "", results: [], searching: false, song: null, mood: "happy", anchorId: null };
 }
 
-type Tab = "make" | "song" | "artists" | "path" | "alchemy";
+type Tab = "make" | "song" | "artists" | "path" | "alchemy" | "lyrics";
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "make", label: "Make a playlist" },
   { id: "song", label: "Playlist from Similar Song" },
   { id: "artists", label: "Similar artists" },
   { id: "path", label: "Song Path" },
   { id: "alchemy", label: "Song Alchemy" },
+  { id: "lyrics", label: "Lyrics Search" },
 ];
 
 interface Result {
   tracks: Track[];
   model: string | null;
-  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy";
+  source: "instant" | "search" | "artist" | "song" | "path" | "alchemy" | "lyrics";
   detail: string;
   label: string;
 }
@@ -313,6 +322,16 @@ class AudioMusePanel extends LitElement {
     _newRadioTemp: { state: true },
     _newRadioSongs: { state: true },
     _alcRemoved: { state: true },
+    _lyWay: { state: true },
+    _lyAxes: { state: true },
+    _lyAxesError: { state: true },
+    _lyTargets: { state: true },
+    _lyText: { state: true },
+    _lyQuery: { state: true },
+    _lyResults: { state: true },
+    _lySearching: { state: true },
+    _lySong: { state: true },
+    _lyCount: { state: true },
   };
 
   declare hass?: Hass;
@@ -388,6 +407,16 @@ class AudioMusePanel extends LitElement {
   declare _newRadioSongs: number;
   /** Songs AudioMuse-AI removed for being near an exclude, on the last run. */
   declare _alcRemoved: number;
+  declare _lyWay: LyricsWay;
+  declare _lyAxes: LyricsAxis[] | null;
+  declare _lyAxesError: string;
+  declare _lyTargets: Record<string, string>;
+  declare _lyText: string;
+  declare _lyQuery: string;
+  declare _lyResults: Track[];
+  declare _lySearching: boolean;
+  declare _lySong: Track | null;
+  declare _lyCount: number;
 
   private _loading = false;
   private _searchTimer?: number;
@@ -398,6 +427,8 @@ class AudioMusePanel extends LitElement {
   private _pathSeq: Record<Side, number> = { start: 0, end: 0 };
   private _alcTimer?: number;
   private _alcSeq = 0;
+  private _lyTimer?: number;
+  private _lySeq = 0;
   private _ticker?: number;
 
   disconnectedCallback(): void {
@@ -408,6 +439,7 @@ class AudioMusePanel extends LitElement {
     window.clearTimeout(this._pathTimers.start);
     window.clearTimeout(this._pathTimers.end);
     window.clearTimeout(this._alcTimer);
+    window.clearTimeout(this._lyTimer);
   }
 
   private _startTicker(): void {
@@ -491,11 +523,27 @@ class AudioMusePanel extends LitElement {
     this._newRadioTemp = 1;
     this._newRadioSongs = 50;
     this._alcRemoved = 0;
+    this._lyWay = "text";
+    this._lyAxes = null;
+    this._lyAxesError = "";
+    this._lyTargets = {};
+    this._lyText = "";
+    this._lyQuery = "";
+    this._lyResults = [];
+    this._lySearching = false;
+    this._lySong = null;
+    this._lyCount = 25;
+  }
+
+  /** Tabs this server can use (Lyrics Search needs lyrics analysis). */
+  private _tabsFor(entry: Entry): ReadonlyArray<{ id: Tab; label: string }> {
+    return TABS.filter((t) => t.id !== "lyrics" || entry.lyrics_available);
   }
 
   private _selectTab(tab: Tab): void {
     this._tab = tab;
     localStorage.setItem(LS_TAB, tab);
+    if (tab === "lyrics") void this._loadLyricsAxes();
   }
 
   protected updated(changed: PropertyValues): void {
@@ -543,6 +591,7 @@ class AudioMusePanel extends LitElement {
     this._songCount = entry.default_count;
     this._pathCount = entry.default_count;
     this._alcCount = entry.default_count;
+    this._lyCount = entry.default_count;
     this._mode = entry.ai_configured ? "ai" : "search";
     const players = this._info.players.map((p) => p.entity_id);
     const remembered = localStorage.getItem(LS_PLAYER);
@@ -570,6 +619,11 @@ class AudioMusePanel extends LitElement {
     this._alcQuery = "";
     this._blendId = null;
     this._alcMsg = "";
+    this._lyAxes = null;
+    this._lyTargets = {};
+    this._lySong = null;
+    this._lyQuery = "";
+    this._lyResults = [];
     void this._loadIdeas();
     void this._loadAnchors();
     void this._loadRadios();
@@ -1114,6 +1168,92 @@ class AudioMusePanel extends LitElement {
     await this._alchemyCall({ type: "audiomuse/delete_radio", radio_id: radio.id }, `✓ Deleted the Radio "${radio.name}".`);
   }
 
+  private _lyAxesLoading = false;
+
+  private async _loadLyricsAxes(): Promise<void> {
+    if (!this.hass || !this._entryId || this._lyAxes || this._lyAxesLoading) return;
+    this._lyAxesLoading = true;
+    try {
+      const res = await this.hass.callWS<{ axes: LyricsAxis[] }>({ type: "audiomuse/lyrics_axes", entry_id: this._entryId });
+      this._lyAxes = res.axes;
+      this._lyAxesError = "";
+    } catch (err) {
+      this._lyAxesError = errorText(err);
+    } finally {
+      this._lyAxesLoading = false;
+    }
+  }
+
+  private _onLyricsSongInput(value: string): void {
+    this._lyQuery = value;
+    this._lySong = null;
+    window.clearTimeout(this._lyTimer);
+    if (value.trim().length < 2) {
+      this._lyResults = [];
+      this._lySearching = false;
+      return;
+    }
+    this._lyTimer = window.setTimeout(async () => {
+      if (!this.hass) return;
+      const seq = ++this._lySeq;
+      this._lySearching = true;
+      try {
+        const res = await this.hass.callWS<{ tracks: Track[] }>({
+          type: "audiomuse/search_tracks",
+          entry_id: this._entryId,
+          query: value.trim(),
+        });
+        if (seq === this._lySeq) this._lyResults = res.tracks.slice(0, 8);
+      } catch (err) {
+        if (seq === this._lySeq) this._error = errorText(err);
+      } finally {
+        if (seq === this._lySeq) this._lySearching = false;
+      }
+    }, SEARCH_DELAY_MS);
+  }
+
+  private _lyricsChosen(): string[] {
+    return (this._lyAxes ?? []).flatMap((axis) => {
+      const label = axis.labels.find((l) => l.id === this._lyTargets[axis.id]);
+      return label ? [label.name] : [];
+    });
+  }
+
+  private async _searchLyrics(): Promise<void> {
+    if (!this.hass || this._busy) return;
+    const way = this._lyWay;
+    const targets = Object.fromEntries(Object.entries(this._lyTargets).filter(([, v]) => v));
+    const text = this._lyText.trim();
+    if ((way === "axis" && !Object.keys(targets).length) || (way === "text" && !text) || (way === "song" && !this._lySong))
+      return;
+    const chosen = this._lyricsChosen().join(" + ");
+    const what = way === "axis" ? chosen : way === "text" ? text : this._lySong!.title;
+    this._busy = "make";
+    this._resultTab = "lyrics";
+    this._makingMode = "search";
+    this._error = "";
+    this._result = null;
+    this._saved = null;
+    this._startTicker();
+    try {
+      const res = await this.hass.callWS<{ tracks: Track[] }>({
+        type: "audiomuse/lyrics_search",
+        entry_id: this._entryId,
+        count: this._lyCount,
+        ...(way === "axis" ? { targets } : way === "text" ? { query: text } : { item_id: this._lySong!.item_id }),
+      });
+      const label = way === "song" ? `lyrics like ${what}` : `lyrics: ${what}`;
+      this._result = { tracks: res.tracks, model: null, source: "lyrics", detail: what, label };
+      this._name = way === "song" ? `Lyrics like ${what}` : nameFromPrompt(what);
+      this._nameTouched = false;
+    } catch (err) {
+      this._error = errorText(err);
+    } finally {
+      this._stopTicker();
+      this._busy = "";
+    }
+  }
+
   private async _loadRadios(): Promise<void> {
     if (!this.hass || !this._entryId) return;
     try {
@@ -1240,12 +1380,12 @@ class AudioMusePanel extends LitElement {
         : nothing}
       ${this._renderStatus(entry)}
       <nav class="tabs" role="tablist" aria-label="AudioMuse">
-        ${TABS.map(
+        ${this._tabsFor(entry).map(
           (t) => html`<button
             role="tab"
             id=${`tab-${t.id}`}
-            class="tab ${this._tab === t.id ? "on" : ""}"
-            aria-selected=${this._tab === t.id}
+            class="tab ${this._shownTab(entry) === t.id ? "on" : ""}"
+            aria-selected=${this._shownTab(entry) === t.id}
             aria-controls="tabpanel"
             @click=${(e: Event) => {
               this._selectTab(t.id);
@@ -1254,20 +1394,27 @@ class AudioMusePanel extends LitElement {
           >${t.label}</button>`
         )}
       </nav>
-      <section class="card" id="tabpanel" role="tabpanel" aria-labelledby=${`tab-${this._tab}`}>
-        ${this._tab === "make"
+      <section class="card" id="tabpanel" role="tabpanel" aria-labelledby=${`tab-${this._shownTab(entry)}`}>
+        ${this._shownTab(entry) === "make"
           ? html`${this._renderMake(entry)}
               <div class="section">${this._renderIdeas()}</div>
               <div class="section">${this._renderRecent()}</div>`
-          : this._tab === "song"
+          : this._shownTab(entry) === "song"
             ? this._renderSong(entry)
-            : this._tab === "artists"
+            : this._shownTab(entry) === "artists"
             ? this._renderArtists(entry)
-            : this._tab === "path"
+            : this._shownTab(entry) === "path"
             ? this._renderPath(entry)
+            : this._shownTab(entry) === "lyrics"
+            ? this._renderLyrics(entry)
             : this._renderAlchemy(entry)}
       </section>
     `;
+  }
+
+  /** The chosen tab, or Make a playlist when the chosen one isn't available here. */
+  private _shownTab(entry: Entry): Tab {
+    return this._tabsFor(entry).some((t) => t.id === this._tab) ? this._tab : "make";
   }
 
   /** Scroll only the tab bar (never the page) so the chosen tab is fully visible. */
@@ -1723,6 +1870,124 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
+  private _renderLyrics(entry: Entry): TemplateResult {
+    if (!this._lyAxes && !this._lyAxesError) void this._loadLyricsAxes();
+    const busy = this._busy !== "";
+    const ways: Array<[LyricsWay, string]> = [
+      ["axis", "By Axis"],
+      ["text", "By Text"],
+      ["song", "By Song"],
+    ];
+    const chosen = Object.values(this._lyTargets).some(Boolean);
+    const ready =
+      this._lyWay === "axis" ? chosen : this._lyWay === "text" ? Boolean(this._lyText.trim()) : Boolean(this._lySong);
+    return html`
+      <h2>Lyrics Search</h2>
+      <p class="intro">Find songs by what the lyrics are about, not how they sound.</p>
+      <div class="mode seed" role="radiogroup" aria-label="Search lyrics">
+        ${ways.map(
+          ([id, label]) => html`<button
+            role="radio"
+            aria-checked=${this._lyWay === id}
+            class=${this._lyWay === id ? "on" : ""}
+            @click=${() => (this._lyWay = id)}
+          >${label}</button>`
+        )}
+      </div>
+      ${this._lyWay === "axis"
+        ? this._lyAxesError
+          ? html`<p class="error">${this._lyAxesError}</p>`
+          : !this._lyAxes
+            ? html`<p class="muted">Loading…</p>`
+            : html`<p class="muted">Pick a value for one or more of these. The more you set, the more specific the
+                  search.</p>
+                <div class="axes">
+                  ${this._lyAxes.map((axis) => {
+                    const picked = axis.labels.find((l) => l.id === this._lyTargets[axis.id]);
+                    return html`<div class="axis">
+                      <strong>${axis.name}</strong>
+                      <small>${axis.description}</small>
+                      <select
+                        aria-label=${axis.name}
+                        @change=${(e: Event) =>
+                          (this._lyTargets = { ...this._lyTargets, [axis.id]: (e.target as HTMLSelectElement).value })}
+                      >
+                        <option value="" ?selected=${!picked}>— None —</option>
+                        ${axis.labels.map(
+                          (l) => html`<option value=${l.id} ?selected=${picked?.id === l.id}>${l.name}</option>`
+                        )}
+                      </select>
+                      ${picked?.description ? html`<small class="picked-desc">${picked.description}</small>` : nothing}
+                    </div>`;
+                  })}
+                </div>`
+        : this._lyWay === "text"
+          ? html`<textarea
+              rows="2"
+              aria-label="What the lyrics are about"
+              placeholder="Describe the lyrics, e.g. songs about heartbreak in the city at night"
+              .value=${this._lyText}
+              @input=${(e: Event) => (this._lyText = (e.target as HTMLTextAreaElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void this._searchLyrics();
+              }}
+            ></textarea>
+            <p class="hint">Matched by meaning, not exact words.</p>`
+          : html`<input
+                class="search"
+                type="search"
+                aria-label="Song, artist or album"
+                placeholder="Song, artist or album"
+                .value=${this._lyQuery}
+                @input=${(e: Event) => this._onLyricsSongInput((e.target as HTMLInputElement).value)}
+              />
+              ${this._lySearching ? html`<p class="muted">Searching…</p>` : nothing}
+              ${this._lyResults.length
+                ? html`<ul class="list">
+                    ${this._lyResults.map(
+                      (t) => html`<li>
+                        <button
+                          class="row-button"
+                          @click=${() => {
+                            this._lySong = t;
+                            this._lyQuery = t.title;
+                            this._lyResults = [];
+                          }}
+                        >
+                          <span class="artist-text"
+                            ><span>${t.title}</span><small>${t.artist}${t.album ? ` · ${t.album}` : ""}</small></span
+                          >
+                        </button>
+                      </li>`
+                    )}
+                  </ul>`
+                : this._lyQuery.trim().length >= 2 && !this._lySearching && !this._lySong
+                  ? html`<p class="muted">No analysed song matches that.</p>`
+                  : nothing}
+              ${this._lySong
+                ? html`<p class="picked">✓ <strong>${this._lySong.title}</strong>
+                    <span class="muted">${this._lySong.artist}</span></p>`
+                : nothing}
+              <p class="hint">Finds songs with similar lyrics and a similar sound. The song itself comes first.</p>`}
+      <div class="row">
+        <label class="count"
+          >Number of results
+          <input
+            type="number"
+            min=${this._info!.min_count}
+            max=${this._info!.max_count}
+            .value=${String(this._lyCount)}
+            @change=${(e: Event) => {
+              const n = parseInt((e.target as HTMLInputElement).value, 10);
+              if (!Number.isNaN(n)) this._lyCount = Math.min(Math.max(n, this._info!.min_count), this._info!.max_count);
+            }}
+        /></label>
+        <button class="primary" ?disabled=${busy || !ready} @click=${() => this._searchLyrics()}>Search</button>
+      </div>
+      ${this._renderOutcome("lyrics", entry)}
+    `;
+  }
+
   private _renderArtists(entry: Entry): TemplateResult {
     const busy = this._busy !== "";
     return html`
@@ -2163,7 +2428,7 @@ class AudioMusePanel extends LitElement {
                   <span>${item.display_name ?? item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
-                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "alchemy" ? "alchemy" : item.source === "search" ? "search" : "request"}: ${item.detail}`
+                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "path" ? "path" : item.source === "alchemy" ? "alchemy" : item.source === "lyrics" ? "lyrics" : item.source === "search" ? "search" : "request"}: ${item.detail}`
                       : nothing}</span
                   >
                 </div>
@@ -2304,6 +2569,34 @@ class AudioMusePanel extends LitElement {
     }
     .hint.warn {
       color: var(--warning-color, #b26a00);
+    }
+    .axes {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .axis {
+      background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .axis strong {
+      display: block;
+      font-weight: 500;
+      color: var(--primary-color);
+    }
+    .axis small {
+      display: block;
+      color: var(--secondary-text-color);
+      font-size: 12px;
+      margin: 2px 0 8px;
+    }
+    .axis select {
+      width: 100%;
+    }
+    .axis small.picked-desc {
+      margin: 6px 0 0;
     }
     .items select.ie {
       padding: 4px 6px;
