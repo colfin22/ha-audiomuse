@@ -37,25 +37,19 @@ Lyrics Search and the Lyrics path need lyrics analysis turned on in AudioMuse-AI
 
 ### Screenshots
 
-| Playlist from Similar Song | Similar artists |
-|---|---|
-| ![Playlist from Similar Song](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-song.png) | ![Similar artists](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-artists.png) |
-
-| Song Path | Song Alchemy |
-|---|---|
-| ![Song Path](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/song-path.png) | ![Song Alchemy](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/song-alchemy.png) |
-
-| Lyrics Search | Album Creation |
-|---|---|
-| ![Lyrics Search](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/lyrics-search.png) | ![Album Creation](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/album-creation.png) |
-
-| Radios | On a phone, dark theme |
-|---|---|
-| ![Radios](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/radios.png) | ![Phone, dark theme](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-phone-dark.png) |
-
 **Suggestions:** tap one to fill the request box, then make it your own.
 
 ![Suggestions pre-fill the request box](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/suggestions.png)
+
+**Similar artists:** see who sounds like an artist, with a pair of songs that sound alike, then make a mix.
+
+![Similar artists](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-artists.png)
+
+**On a phone** (dark theme): Playlist from Similar Song, Song Path and Song Alchemy.
+
+| Playlist from Similar Song | Song Path | Song Alchemy |
+|---|---|---|
+| ![Playlist from Similar Song on a phone](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/phone-similar-song.png) | ![Song Path on a phone](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/phone-song-path.png) | ![Song Alchemy on a phone](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/phone-song-alchemy.png) |
 
 ## Requirements
 
