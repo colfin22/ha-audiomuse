@@ -282,3 +282,46 @@ async def test_lyrics_enabled_but_nothing_analysed_is_not_available(client):
         m.get(f"{URL}/api/lyrics/stats", payload={"lyrics_enabled": True, "song_count": 0})
         stats = await client.get_lyrics_stats()
     assert stats.enabled and not stats.available
+
+
+async def test_search_tracks(client):
+    with aioresponses() as m:
+        m.get(
+            f"{URL}/api/search_tracks?search_query=There+Goes",
+            payload=[{"item_id": "s1", "title": "There Goes the Fear", "author": "Doves", "album": "The Last Broadcast"}],
+        )
+        tracks = await client.search_tracks("There Goes")
+    assert tracks[0].item_id == "s1"
+    assert tracks[0].artist == "Doves"
+    assert tracks[0].album == "The Last Broadcast"
+
+
+async def test_similar_tracks_from_a_song(client):
+    with aioresponses() as m:
+        m.get(
+            f"{URL}/api/similar_tracks?eliminate_duplicates=true&item_id=s1&n=5&radius_similarity=false",
+            payload=[{"item_id": "t1", "title": "Pounding", "author": "Doves", "distance": 0.02}],
+        )
+        tracks = await client.similar_tracks(item_id="s1", count=5, limit_per_artist=True, radius_similarity=False)
+    assert [t.item_id for t in tracks] == ["t1"]
+
+
+async def test_similar_tracks_from_an_anchor(client):
+    with aioresponses() as m:
+        m.get(
+            f"{URL}/api/similar_tracks?anchor_id=3&eliminate_duplicates=true&n=25&radius_similarity=true",
+            payload=[{"item_id": "t2", "title": "Two", "author": "B"}],
+        )
+        tracks = await client.similar_tracks(anchor_id=3)
+    assert tracks[0].item_id == "t2"
+
+
+async def test_similar_tracks_needs_a_song_or_anchor(client):
+    with pytest.raises(ValueError):
+        await client.similar_tracks()
+
+
+async def test_anchors(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/anchors", payload={"anchors": [{"id": 3, "name": "Post-rock calm"}]})
+        assert await client.get_anchors() == [{"id": 3, "name": "Post-rock calm"}]

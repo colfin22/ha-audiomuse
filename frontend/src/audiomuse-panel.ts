@@ -78,7 +78,7 @@ interface RecentItem {
   playlist_name: string;
   /** playlist_name without AudioMuse-AI's "_instant" suffix (older integrations don't send it). */
   display_name?: string;
-  source: "instant" | "search" | "artist" | "page";
+  source: "instant" | "search" | "artist" | "song" | "page";
   detail: string | null;
   track_count: number;
   created: string;
@@ -87,9 +87,15 @@ interface RecentItem {
 type Mode = "ai" | "search";
 
 /** The page's tabs. More arrive in later steps (issue #15). */
-type Tab = "make" | "artists" | "alchemy";
+interface Anchor {
+  id: number;
+  name: string;
+}
+
+type Tab = "make" | "song" | "artists" | "alchemy";
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "make", label: "Make a playlist" },
+  { id: "song", label: "Playlist from Similar Song" },
   { id: "artists", label: "Similar artists" },
   { id: "alchemy", label: "Song Alchemy" },
 ];
@@ -97,7 +103,7 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
 interface Result {
   tracks: Track[];
   model: string | null;
-  source: "instant" | "search" | "artist";
+  source: "instant" | "search" | "artist" | "song";
   detail: string;
   label: string;
 }
@@ -237,6 +243,17 @@ class AudioMusePanel extends LitElement {
     _resultTab: { state: true },
     _similarCount: { state: true },
     _why: { state: true },
+    _songQuery: { state: true },
+    _songResults: { state: true },
+    _songSearching: { state: true },
+    _songError: { state: true },
+    _seedSong: { state: true },
+    _seedMode: { state: true },
+    _anchors: { state: true },
+    _anchorId: { state: true },
+    _songCount: { state: true },
+    _limitPerArtist: { state: true },
+    _radius: { state: true },
   };
 
   declare hass?: Hass;
@@ -278,16 +295,30 @@ class AudioMusePanel extends LitElement {
   declare _resultTab: Tab;
   declare _similarCount: number;
   declare _why: boolean;
+  declare _songQuery: string;
+  declare _songResults: Track[];
+  declare _songSearching: boolean;
+  declare _songError: string;
+  declare _seedSong: Track | null;
+  declare _seedMode: "song" | "anchor";
+  declare _anchors: Anchor[] | null;
+  declare _anchorId: number | null;
+  declare _songCount: number;
+  declare _limitPerArtist: boolean;
+  declare _radius: boolean;
 
   private _loading = false;
   private _searchTimer?: number;
   private _searchSeq = 0;
+  private _songTimer?: number;
+  private _songSeq = 0;
   private _ticker?: number;
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.clearInterval(this._ticker);
     window.clearTimeout(this._searchTimer);
+    window.clearTimeout(this._songTimer);
   }
 
   private _startTicker(): void {
@@ -339,6 +370,17 @@ class AudioMusePanel extends LitElement {
     this._resultTab = "make";
     this._similarCount = 10;
     this._why = true;
+    this._songQuery = "";
+    this._songResults = [];
+    this._songSearching = false;
+    this._songError = "";
+    this._seedSong = null;
+    this._seedMode = "song";
+    this._anchors = null;
+    this._anchorId = null;
+    this._songCount = 25;
+    this._limitPerArtist = true;
+    this._radius = true;
   }
 
   private _selectTab(tab: Tab): void {
@@ -388,6 +430,7 @@ class AudioMusePanel extends LitElement {
     this._entryId = entryId;
     if (remember) localStorage.setItem(LS_ENTRY, entryId);
     this._count = entry.default_count;
+    this._songCount = entry.default_count;
     this._mode = entry.ai_configured ? "ai" : "search";
     const players = this._info.players.map((p) => p.entity_id);
     const remembered = localStorage.getItem(LS_PLAYER);
@@ -404,7 +447,13 @@ class AudioMusePanel extends LitElement {
     this._selectedArtist = "";
     this._similar = null;
     this._radiosMsg = "";
+    this._songQuery = "";
+    this._songResults = [];
+    this._seedSong = null;
+    this._anchors = null;
+    this._anchorId = null;
     void this._loadIdeas();
+    void this._loadAnchors();
     void this._loadRadios();
     void this._loadRecent();
   }
@@ -615,6 +664,93 @@ class AudioMusePanel extends LitElement {
     }
   }
 
+  private async _loadAnchors(): Promise<void> {
+    if (!this.hass || !this._entryId) return;
+    try {
+      const res = await this.hass.callWS<{ anchors: Anchor[] }>({ type: "audiomuse/anchors", entry_id: this._entryId });
+      this._anchors = res.anchors;
+      if (this._anchorId === null && res.anchors.length) this._anchorId = res.anchors[0].id;
+    } catch {
+      this._anchors = [];
+    }
+  }
+
+  private _onSongInput(value: string): void {
+    this._songQuery = value;
+    this._seedSong = null;
+    window.clearTimeout(this._songTimer);
+    if (value.trim().length < 2) {
+      this._songResults = [];
+      this._songSearching = false;
+      return;
+    }
+    this._songTimer = window.setTimeout(() => void this._searchSongs(value.trim()), SEARCH_DELAY_MS);
+  }
+
+  private async _searchSongs(query: string): Promise<void> {
+    if (!this.hass) return;
+    const seq = ++this._songSeq;
+    this._songSearching = true;
+    this._songError = "";
+    try {
+      const res = await this.hass.callWS<{ tracks: Track[] }>({
+        type: "audiomuse/search_tracks",
+        entry_id: this._entryId,
+        query,
+      });
+      if (seq === this._songSeq) this._songResults = res.tracks.slice(0, 10);
+    } catch (err) {
+      if (seq === this._songSeq) this._songError = errorText(err);
+    } finally {
+      if (seq === this._songSeq) this._songSearching = false;
+    }
+  }
+
+  private _pickSong(track: Track): void {
+    this._seedSong = track;
+    this._songQuery = track.title;
+    this._songResults = [];
+  }
+
+  private async _findSimilarSongs(): Promise<void> {
+    if (!this.hass || this._busy) return;
+    const anchor = this._seedMode === "anchor" ? this._anchors?.find((a) => a.id === this._anchorId) : undefined;
+    const seed = this._seedMode === "song" ? this._seedSong : null;
+    if (!seed && !anchor) return;
+    const what = seed ? seed.title : anchor!.name;
+    this._busy = "make";
+    this._resultTab = "song";
+    this._makingMode = "search";
+    this._error = "";
+    this._result = null;
+    this._saved = null;
+    this._startTicker();
+    try {
+      const res = await this.hass.callWS<{ tracks: Track[] }>({
+        type: "audiomuse/similar_tracks",
+        entry_id: this._entryId,
+        ...(seed ? { item_id: seed.item_id } : { anchor_id: anchor!.id }),
+        count: this._songCount,
+        limit_per_artist: this._limitPerArtist,
+        radius_similarity: this._radius,
+      });
+      this._result = {
+        tracks: res.tracks,
+        model: null,
+        source: "song",
+        detail: seed ? `${seed.title} (${seed.artist})` : `anchor: ${anchor!.name}`,
+        label: `like ${what}`,
+      };
+      this._name = `Like ${what}`;
+      this._nameTouched = false;
+    } catch (err) {
+      this._error = errorText(err);
+    } finally {
+      this._stopTicker();
+      this._busy = "";
+    }
+  }
+
   private async _loadRadios(): Promise<void> {
     if (!this.hass || !this._entryId) return;
     try {
@@ -759,7 +895,9 @@ class AudioMusePanel extends LitElement {
           ? html`${this._renderMake(entry)}
               <div class="section">${this._renderIdeas()}</div>
               <div class="section">${this._renderRecent()}</div>`
-          : this._tab === "artists"
+          : this._tab === "song"
+            ? this._renderSong(entry)
+            : this._tab === "artists"
             ? this._renderArtists(entry)
             : html`<h2>Song Alchemy</h2>
                 <div class="section first">${this._renderRadios(entry)}</div>`}
@@ -988,6 +1126,115 @@ class AudioMusePanel extends LitElement {
     `;
   }
 
+  private _renderSong(entry: Entry): TemplateResult {
+    const busy = this._busy !== "";
+    const anchors = this._anchors ?? [];
+    const ready = this._seedMode === "song" ? Boolean(this._seedSong) : this._anchorId !== null && anchors.length > 0;
+    return html`
+      <h2>Playlist from Similar Song</h2>
+      <p class="intro">Pick a song and get a playlist of songs that sound like it.</p>
+      <div class="mode seed" role="radiogroup" aria-label="Start from">
+        <button
+          role="radio"
+          aria-checked=${this._seedMode === "song"}
+          class=${this._seedMode === "song" ? "on" : ""}
+          @click=${() => (this._seedMode = "song")}
+        >🎵 Song</button>
+        <button
+          role="radio"
+          aria-checked=${this._seedMode === "anchor"}
+          class=${this._seedMode === "anchor" ? "on" : ""}
+          @click=${() => (this._seedMode = "anchor")}
+        >Anchor</button>
+      </div>
+      ${this._seedMode === "song"
+        ? html`<input
+              class="search"
+              type="search"
+              aria-label="Song, artist or album"
+              placeholder="Song, artist or album"
+              .value=${this._songQuery}
+              @input=${(e: Event) => this._onSongInput((e.target as HTMLInputElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter" && this._songResults.length) this._pickSong(this._songResults[0]);
+              }}
+            />
+            ${this._songSearching ? html`<p class="muted">Searching…</p>` : nothing}
+            ${this._songError ? html`<p class="error">${this._songError}</p>` : nothing}
+            ${this._songResults.length
+              ? html`<ul class="list">
+                  ${this._songResults.map(
+                    (t) => html`<li>
+                      <button class="row-button" @click=${() => this._pickSong(t)}>
+                        <span class="artist-text"
+                          ><span>${t.title}</span><small>${t.artist}${t.album ? ` · ${t.album}` : ""}</small></span
+                        >
+                      </button>
+                    </li>`
+                  )}
+                </ul>`
+              : this._songQuery.trim().length >= 2 && !this._songSearching && !this._seedSong
+                ? html`<p class="muted">No analysed song matches that.</p>`
+                : nothing}
+            ${this._seedSong
+              ? html`<p class="picked">✓ <strong>${this._seedSong.title}</strong>
+                  <span class="muted">${this._seedSong.artist}${this._seedSong.album
+                    ? ` · ${this._seedSong.album}`
+                    : ""}</span></p>`
+              : nothing}`
+        : this._anchors === null
+          ? html`<p class="muted">Loading anchors…</p>`
+          : anchors.length
+            ? html`<select
+                class="search"
+                aria-label="Anchor"
+                .value=${String(this._anchorId ?? "")}
+                @change=${(e: Event) => (this._anchorId = Number((e.target as HTMLSelectElement).value))}
+              >
+                ${anchors.map(
+                  (a) => html`<option value=${String(a.id)} ?selected=${a.id === this._anchorId}>${a.name}</option>`
+                )}
+              </select>`
+            : html`<p class="muted">No anchors yet. Create them on AudioMuse-AI's
+                <a href=${`${entry.url}/alchemy`} target="_blank" rel="noreferrer">Song Alchemy</a> page.</p>`}
+      <label class="check">
+        <input
+          type="checkbox"
+          .checked=${this._limitPerArtist}
+          @change=${(e: Event) => (this._limitPerArtist = (e.target as HTMLInputElement).checked)}
+        />
+        <span>Limit songs per artist<small>Stops one artist taking over the playlist.</small></span>
+      </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          .checked=${this._radius}
+          @change=${(e: Event) => (this._radius = (e.target as HTMLInputElement).checked)}
+        />
+        <span>Radius Similarity<small>Orders the songs so they flow into each other.</small></span>
+      </label>
+      <div class="row">
+        <label class="count"
+          >Songs
+          <input
+            type="number"
+            min=${this._info!.min_count}
+            max=${this._info!.max_count}
+            .value=${String(this._songCount)}
+            @change=${(e: Event) => {
+              const n = parseInt((e.target as HTMLInputElement).value, 10);
+              if (!Number.isNaN(n))
+                this._songCount = Math.min(Math.max(n, this._info!.min_count), this._info!.max_count);
+            }}
+        /></label>
+        <button class="primary" ?disabled=${busy || !ready} @click=${() => this._findSimilarSongs()}>
+          Find Similar Tracks
+        </button>
+      </div>
+      ${this._renderOutcome("song", entry)}
+    `;
+  }
+
   private _renderArtists(entry: Entry): TemplateResult {
     const busy = this._busy !== "";
     return html`
@@ -1138,7 +1385,7 @@ class AudioMusePanel extends LitElement {
                   <span>${item.display_name ?? item.playlist_name}</span>
                   <span class="muted"
                     >${whenText(item.created)} · ${songs(item.track_count)}${item.detail
-                      ? html` · ${item.source === "artist" ? "artist" : item.source === "search" ? "search" : "request"}: ${item.detail}`
+                      ? html` · ${item.source === "artist" ? "artist" : item.source === "song" ? "song" : item.source === "search" ? "search" : "request"}: ${item.detail}`
                       : nothing}</span
                   >
                 </div>
@@ -1266,11 +1513,22 @@ class AudioMusePanel extends LitElement {
       margin-top: 10px;
       color: var(--primary-text-color);
     }
+    .check input[type="checkbox"] {
+      min-height: 0;
+      margin: 3px 0 0;
+      flex: none;
+    }
     .check small,
     .artist-text small {
       display: block;
       color: var(--secondary-text-color);
       font-size: 12px;
+    }
+    .mode.seed {
+      margin-bottom: 12px;
+    }
+    .picked {
+      margin: 10px 2px 0;
     }
     .artist-text {
       display: flex;

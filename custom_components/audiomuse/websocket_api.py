@@ -56,6 +56,9 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_recent)
     websocket_api.async_register_command(hass, ws_recent_remove)
     websocket_api.async_register_command(hass, ws_search)
+    websocket_api.async_register_command(hass, ws_search_tracks)
+    websocket_api.async_register_command(hass, ws_similar_tracks)
+    websocket_api.async_register_command(hass, ws_anchors)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -210,7 +213,7 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
-        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist"]),
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song"]),
         vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
@@ -398,5 +401,82 @@ async def ws_search(hass: HomeAssistant, connection, msg) -> None:
         entry = _entry(hass, msg["entry_id"])
         result = await async_make_search(entry, msg["query"], msg.get("count"))
         return {"tracks": [t.as_dict() for t in result.tracks]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/search_tracks",
+        vol.Required("entry_id"): str,
+        vol.Required("query"): vol.All(cv.string, vol.Length(min=1, max=200)),
+    }
+)
+@websocket_api.async_response
+async def ws_search_tracks(hass: HomeAssistant, connection, msg) -> None:
+    """Songs in the analysed library matching a title, artist or album."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            tracks = await entry.runtime_data.client.search_tracks(msg["query"])
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Song search failed: {err}") from err
+        return {"tracks": [t.as_dict() for t in tracks]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/similar_tracks",
+        vol.Required("entry_id"): str,
+        vol.Exclusive("item_id", "seed"): cv.string,
+        vol.Exclusive("anchor_id", "seed"): vol.Coerce(int),
+        vol.Optional("count", default=25): vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT)),
+        vol.Optional("limit_per_artist", default=True): cv.boolean,
+        vol.Optional("radius_similarity", default=True): cv.boolean,
+    }
+)
+@websocket_api.async_response
+async def ws_similar_tracks(hass: HomeAssistant, connection, msg) -> None:
+    """Playlist from Similar Song: songs like one song or a saved anchor."""
+
+    async def go():
+        if not msg.get("item_id") and msg.get("anchor_id") is None:
+            raise HomeAssistantError("Pick a song or an anchor first")
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            tracks = await entry.runtime_data.client.similar_tracks(
+                item_id=msg.get("item_id"),
+                anchor_id=msg.get("anchor_id"),
+                count=msg["count"],
+                limit_per_artist=msg["limit_per_artist"],
+                radius_similarity=msg["radius_similarity"],
+            )
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Similar songs failed: {err}") from err
+        return {"tracks": [t.as_dict() for t in tracks]}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/anchors",
+        vol.Required("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_anchors(hass: HomeAssistant, connection, msg) -> None:
+    """Saved Song Alchemy anchors (id and name)."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            anchors = await entry.runtime_data.client.get_anchors()
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Loading anchors failed: {err}") from err
+        return {"anchors": anchors}
 
     await _run(connection, msg, go())
