@@ -12,30 +12,46 @@ This is a community integration, not an official AudioMuse-AI project.
 
 ## Features
 
+The page has a tab for each way of making a playlist. Every tab ends the same way: name the playlist, then **Save to library** or **Save & play** on any Music Assistant speaker.
+
 - **Make a playlist**
   - Describe what you want to hear ("dreamy synth pop for a late night drive").
-  - **AI pick** lets AudioMuse-AI's AI choose the songs.
-  - **Quick search** uses AudioMuse-AI's text search instead: faster, and no AI needed.
-- **Suggestions:** the same starting points as AudioMuse-AI's Instant Playlist page (Similar Song, Multi-Song Mix, From Artist, Genre / Mood / Year, Song Journey and more). Tap one to fill the request box, then edit it.
-- **Playlist ideas:** AudioMuse-AI's own suggestions, under the request box. Tap one for an instant playlist.
-- **Playlist from Similar Song** (its own tab): pick a song, or a saved Song Alchemy anchor, and get a playlist of songs that sound like it. Options as on AudioMuse-AI's own page: limit songs per artist, and Radius Similarity.
-- **Similar artists** (its own tab): search your artists, choose how many similar artists to show, see a pair of songs that sound alike for each one, and make a mix of an artist plus the closest-sounding ones.
-- **Song Path** (its own tab): pick a start and an end (a song, a mood or a saved anchor) and get a playlist that moves gradually from one to the other. With lyrics analysis on, a Lyrics path follows what the songs are about as well as how they sound.
-- **Song Alchemy** (its own tab):
+  - **AI pick** lets AudioMuse-AI's AI choose the songs. **Quick search** uses AudioMuse-AI's text search instead: faster, and no AI needed.
+  - **Suggestions:** the same starting points as AudioMuse-AI's Instant Playlist page (Similar Song, Multi-Song Mix, From Artist, Genre / Mood / Year, Song Journey and more). Tap one to fill the request box, then edit it.
+  - **Playlist ideas:** AudioMuse-AI's own suggestions. Tap one for an instant playlist.
+  - **Recent:** playlists saved from Home Assistant, ready to play again.
+- **Playlist from Similar Song:** pick a song, or a saved anchor, and get songs that sound like it. Limit songs per artist and Radius Similarity work as on AudioMuse-AI's own page.
+- **Similar artists:** search your artists, choose how many similar artists to show, see a pair of songs that sound alike for each one, and make a mix of an artist plus the closest-sounding ones.
+- **Song Path:** pick a start and an end (a song, a mood or a saved anchor) and get a playlist that moves gradually from one to the other. A Lyrics path follows what the songs are about as well as how they sound.
+- **Song Alchemy**
   - **Alchemy:** pick songs and artists to include or exclude, and get a blended playlist. Save the blend as an anchor to reuse it.
   - **Anchors:** rename or delete your saved blends.
   - **Radios:** make a Radio from an anchor, turn Radios on or off, change their temperature and number of songs, and refresh them into playlists.
-- **Lyrics Search** (its own tab, shown when lyrics analysis is on in AudioMuse-AI): find songs by what the lyrics are about. Pick values on AudioMuse-AI's lyrics axes (Setting, Social Dynamic, Emotional Valence, Narrative Temporality, Thematic Weight), describe the lyrics in your own words, or start from a song.
-- **Album Creation** (its own tab, shown when lyrics analysis and Text Search are on in AudioMuse-AI): start from a song or a description ("folk with piano") and get an album-length playlist in album order, with AudioMuse-AI's track count, length, artists and cohesion. Refine a description with concepts (more or less of a genre, instrument, mood and so on).
-- **Recent** (at the bottom of Make a playlist): playlists saved from Home Assistant, ready to play again.
-- **Save to library, or Save & play** on any Music Assistant speaker.
+- **Lyrics Search:** find songs by what the lyrics are about. Pick values on AudioMuse-AI's lyrics axes (Setting, Social Dynamic, Emotional Valence, Narrative Temporality, Thematic Weight), describe the lyrics in your own words, or start from a song.
+- **Album Creation:** start from a song or a description ("folk with piano") and get an album-length playlist in album order, with AudioMuse-AI's track count, length, artists and cohesion. Refine a description with concepts: more or less of a genre, instrument, mood and so on.
 - **Sensors:** songs, albums and artists analysed, busy workers, queued tasks and version.
 - **Actions** for automations, scripts and voice. Every one returns its results.
 - Follows your Home Assistant theme, light or dark, and works on phones and wall tablets.
 
-| Similar artists | On a phone, dark theme |
+Lyrics Search and the Lyrics path need lyrics analysis turned on in AudioMuse-AI. Album Creation needs lyrics analysis and Text Search (CLAP). Tabs and options that your AudioMuse-AI can't use are hidden.
+
+### Screenshots
+
+| Playlist from Similar Song | Similar artists |
 |---|---|
-| ![Similar artists](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-artists.png) | ![Phone, dark theme](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-phone-dark.png) |
+| ![Playlist from Similar Song](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-song.png) | ![Similar artists](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/similar-artists.png) |
+
+| Song Path | Song Alchemy |
+|---|---|
+| ![Song Path](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/song-path.png) | ![Song Alchemy](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/song-alchemy.png) |
+
+| Lyrics Search | Album Creation |
+|---|---|
+| ![Lyrics Search](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/lyrics-search.png) | ![Album Creation](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/album-creation.png) |
+
+| Radios | On a phone, dark theme |
+|---|---|
+| ![Radios](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/radios.png) | ![Phone, dark theme](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-phone-dark.png) |
 
 **Suggestions:** tap one to fill the request box, then make it your own.
 
@@ -49,7 +65,7 @@ This is a community integration, not an official AudioMuse-AI project.
 - **For AI pick (optional):** an AI provider configured **in AudioMuse-AI** (OpenAI-compatible, Ollama, Gemini or Mistral).
   - Choose a model that supports tool calling; AudioMuse-AI requires it.
   - Your AI key stays in AudioMuse-AI.
-  - Quick search, ideas, similar artists and Radios all work without AI.
+  - Only AI pick needs it. Every other tab works without AI.
 
 ## Installation
 
