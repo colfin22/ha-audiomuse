@@ -69,6 +69,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_add_radio)
     websocket_api.async_register_command(hass, ws_update_radio)
     websocket_api.async_register_command(hass, ws_delete_radio)
+    websocket_api.async_register_command(hass, ws_lyrics_axes)
+    websocket_api.async_register_command(hass, ws_lyrics_search)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list:
@@ -223,7 +225,7 @@ async def ws_instant(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=200)),
         vol.Required("item_ids"): vol.All([cv.string], vol.Length(min=1)),
         vol.Optional("play_on"): cv.entity_id,
-        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path", "alchemy"]),
+        vol.Optional("source", default="page"): vol.In(["page", "instant", "search", "artist", "song", "path", "alchemy", "lyrics"]),
         vol.Optional("detail"): vol.All(cv.string, vol.Length(max=2000)),
     }
 )
@@ -753,5 +755,56 @@ async def ws_delete_radio(hass: HomeAssistant, connection, msg) -> None:
         except AudioMuseError as err:
             raise HomeAssistantError(f"Deleting the Radio failed: {err}") from err
         return {}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "audiomuse/lyrics_axes", vol.Required("entry_id"): str})
+@websocket_api.async_response
+async def ws_lyrics_axes(hass: HomeAssistant, connection, msg) -> None:
+    """Lyrics Search "By Axis" choices."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        try:
+            axes = await entry.runtime_data.client.lyrics_axes()
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Could not load lyrics choices: {err}") from err
+        return {"axes": axes}
+
+    await _run(connection, msg, go())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "audiomuse/lyrics_search",
+        vol.Required("entry_id"): str,
+        vol.Exclusive("targets", "way"): {cv.string: cv.string},
+        vol.Exclusive("query", "way"): vol.All(cv.string, vol.Length(min=1, max=2000)),
+        vol.Exclusive("item_id", "way"): cv.string,
+        vol.Optional("count", default=25): vol.All(vol.Coerce(int), vol.Range(min=MIN_COUNT, max=MAX_COUNT)),
+    }
+)
+@websocket_api.async_response
+async def ws_lyrics_search(hass: HomeAssistant, connection, msg) -> None:
+    """Lyrics Search: by axis choices, by a description, or from a song."""
+
+    async def go():
+        entry = _entry(hass, msg["entry_id"])
+        client = entry.runtime_data.client
+        try:
+            if "targets" in msg:
+                tracks = await client.lyrics_by_axes(msg["targets"], count=msg["count"])
+            elif "query" in msg:
+                tracks = await client.lyrics_by_text(msg["query"], count=msg["count"])
+            elif "item_id" in msg:
+                tracks = await client.lyrics_by_song(msg["item_id"], count=msg["count"])
+            else:
+                raise HomeAssistantError("Pick axis values, type a description, or pick a song")
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        except AudioMuseError as err:
+            raise HomeAssistantError(f"Lyrics search failed: {err}") from err
+        return {"tracks": [t.as_dict() for t in tracks]}
 
     await _run(connection, msg, go())

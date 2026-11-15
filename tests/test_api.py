@@ -451,3 +451,46 @@ async def test_add_update_delete_radio(client):
         await client.delete_radio(3)
     assert added == {"anchor_id": 7, "temperature": 0.5, "n_results": 40, "enabled": True}
     assert updated == {"enabled": False}
+
+
+async def test_lyrics_axes(client):
+    with aioresponses() as m:
+        m.get(f"{URL}/api/lyrics/axes", payload={"axes": {
+            "AXIS_3_EMOTIONAL_VALENCE": {
+                "description": "The psychological tone.",
+                "labels": {"MELANCHOLIC": "Sadness and longing.", "RADIANT": "Joy."},
+            },
+        }})
+        axes = await client.lyrics_axes()
+    assert axes == [{
+        "id": "AXIS_3_EMOTIONAL_VALENCE", "name": "Emotional Valence", "description": "The psychological tone.",
+        "labels": [
+            {"id": "MELANCHOLIC", "name": "Melancholic", "description": "Sadness and longing."},
+            {"id": "RADIANT", "name": "Radiant", "description": "Joy."},
+        ],
+    }]
+
+
+async def test_lyrics_searches(client):
+    with aioresponses() as m:
+        m.post(f"{URL}/api/lyrics/search/axes", payload={"count": 1, "results": [{"item_id": "a1", "title": "Sad", "author": "P"}]})
+        m.post(f"{URL}/api/lyrics/search/text", payload={"count": 1, "results": [{"item_id": "t1", "title": "Home", "author": "B"}]})
+        m.post(f"{URL}/api/sem_grove/search", payload={"count": 2, "results": [
+            {"item_id": "s1", "title": "Seed", "author": "D", "is_seed": True},
+            {"item_id": "s2", "title": "Next", "author": "E"},
+        ]})
+        by_axes = await client.lyrics_by_axes({"AXIS_3_EMOTIONAL_VALENCE": "MELANCHOLIC"}, count=10)
+        by_text = await client.lyrics_by_text("leaving home", count=10)
+        by_song = await client.lyrics_by_song("s1", count=10)
+        sent = [r.kwargs["json"] for k, rs in m.requests.items() for r in rs]
+    assert [t.item_id for t in by_axes] == ["a1"]
+    assert [t.item_id for t in by_text] == ["t1"]
+    assert [t.item_id for t in by_song] == ["s1", "s2"]  # seed first, as on AudioMuse-AI's page
+    assert {"targets": {"AXIS_3_EMOTIONAL_VALENCE": "MELANCHOLIC"}, "limit": 10} in sent
+    assert {"query": "leaving home", "limit": 10} in sent
+    assert {"item_id": "s1", "limit": 10} in sent
+
+
+async def test_lyrics_by_axes_needs_a_choice(client):
+    with pytest.raises(ValueError):
+        await client.lyrics_by_axes({})

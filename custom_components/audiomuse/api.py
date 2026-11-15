@@ -476,6 +476,57 @@ class AudioMuseClient:
         """Delete a Radio (its anchor is kept)."""
         await self._request("DELETE", f"/api/radios/{int(radio_id)}")
 
+    async def lyrics_axes(self) -> list[dict[str, Any]]:
+        """AudioMuse-AI's lyrics "axes" and their choices, with readable names.
+
+        [{"id": "AXIS_3_EMOTIONAL_VALENCE", "name": "Emotional Valence",
+          "description": ..., "labels": [{"id": "MELANCHOLIC", "name": "Melancholic",
+          "description": ...}]}]
+        """
+        data = await self._request("GET", "/api/lyrics/axes") or {}
+        axes = data.get("axes") or {}
+        out = []
+        for axis_id, axis in axes.items():
+            if not isinstance(axis, dict):
+                continue
+            labels = axis.get("labels") or {}
+            pairs = labels.items() if isinstance(labels, dict) else ((str(x), "") for x in labels)
+            out.append(
+                {
+                    "id": axis_id,
+                    "name": _axis_name(axis_id),
+                    "description": str(axis.get("description") or ""),
+                    "labels": [
+                        {"id": str(k), "name": _readable(str(k)), "description": str(v or "")} for k, v in pairs
+                    ],
+                }
+            )
+        return out
+
+    async def lyrics_by_axes(self, targets: dict[str, str], count: int = 25) -> list[Track]:
+        """Songs whose lyrics match one chosen label on one or more axes."""
+        targets = {k: v for k, v in targets.items() if v}
+        if not targets:
+            raise ValueError("Pick a value for at least one axis")
+        data = await self._request(
+            "POST", "/api/lyrics/search/axes", json={"targets": targets, "limit": count}, timeout=AI_TIMEOUT
+        ) or {}
+        return [_track(t) for t in data.get("results") or []]
+
+    async def lyrics_by_text(self, query: str, count: int = 25) -> list[Track]:
+        """Songs whose lyrics are about the description (by meaning, not exact words)."""
+        data = await self._request(
+            "POST", "/api/lyrics/search/text", json={"query": query, "limit": count}, timeout=AI_TIMEOUT
+        ) or {}
+        return [_track(t) for t in data.get("results") or []]
+
+    async def lyrics_by_song(self, item_id: str, count: int = 25) -> list[Track]:
+        """Songs with similar lyrics and a similar sound (the song itself comes first)."""
+        data = await self._request(
+            "POST", "/api/sem_grove/search", json={"item_id": item_id, "limit": count}, timeout=AI_TIMEOUT
+        ) or {}
+        return [_track(t) for t in data.get("results") or []]
+
     async def get_anchors(self) -> list[dict[str, Any]]:
         """Saved Song Alchemy anchors: [{"id": int, "name": str}]."""
         data = await self._request("GET", "/api/anchors") or {}
@@ -590,6 +641,19 @@ def _track(raw: dict[str, Any]) -> Track:
         artist=str(raw.get("artist") or raw.get("author") or ""),
         album=raw.get("album") or None,
     )
+
+
+def _readable(code: str) -> str:
+    """SURREAL_ABSTRACT -> Surreal Abstract."""
+    return " ".join(w.capitalize() for w in code.replace("-", "_").split("_") if w)
+
+
+def _axis_name(axis_id: str) -> str:
+    """AXIS_3_EMOTIONAL_VALENCE -> Emotional Valence."""
+    parts = axis_id.split("_")
+    if len(parts) > 2 and parts[0] == "AXIS" and parts[1].isdigit():
+        parts = parts[2:]
+    return _readable("_".join(parts))
 
 
 def _sounds_alike(matches: Any) -> tuple[str, str] | None:
