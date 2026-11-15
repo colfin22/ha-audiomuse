@@ -311,6 +311,48 @@ class AudioMuseClient:
         ) or []
         return [_track(t) for t in data]
 
+    async def search_tracks(self, query: str) -> list[Track]:
+        """Find songs in the analysed library by title, artist or album."""
+        data = await self._request("GET", "/api/search_tracks", params={"search_query": query}) or []
+        return [_track(t) for t in data] if isinstance(data, list) else []
+
+    async def similar_tracks(
+        self,
+        item_id: str | None = None,
+        anchor_id: int | None = None,
+        count: int = 25,
+        limit_per_artist: bool = True,
+        radius_similarity: bool = True,
+    ) -> list[Track]:
+        """Songs that sound like one song, or like a saved anchor.
+
+        ``limit_per_artist`` and ``radius_similarity`` are AudioMuse-AI's
+        "Limit songs per artist" and "Radius Similarity" options (both on by
+        default, as on its own page).
+        """
+        if not item_id and anchor_id is None:
+            raise ValueError("item_id or anchor_id is required")
+        params: dict[str, Any] = {
+            "n": count,
+            "eliminate_duplicates": "true" if limit_per_artist else "false",
+            "radius_similarity": "true" if radius_similarity else "false",
+        }
+        if item_id:
+            params["item_id"] = item_id
+        else:
+            params["anchor_id"] = anchor_id
+        data = await self._request("GET", "/api/similar_tracks", params=params) or []
+        return [_track(t) for t in data] if isinstance(data, list) else []
+
+    async def get_anchors(self) -> list[dict[str, Any]]:
+        """Saved Song Alchemy anchors: [{"id": int, "name": str}]."""
+        data = await self._request("GET", "/api/anchors") or {}
+        return [
+            {"id": a["id"], "name": str(a.get("name") or "")}
+            for a in data.get("anchors", [])
+            if isinstance(a, dict) and "id" in a
+        ]
+
     async def playlist_ideas(self) -> list[str]:
         """Return AudioMuse-AI's suggested search prompts."""
         data = await self._request("GET", "/api/clap/top_queries") or {}
