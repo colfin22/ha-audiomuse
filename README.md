@@ -149,8 +149,6 @@ Everything except playback works with every music server AudioMuse-AI supports. 
 
 🧪 means built from the Music Assistant provider source but not yet confirmed on a real server. **Testers wanted:** if you use Jellyfin, Emby or Plex, please try **Save & play** and report the result in an [issue](https://github.com/colfin22/ha-audiomuse/issues).
 
-**Jellyfin and Emby: use the same server account in AudioMuse-AI and Music Assistant.** AudioMuse-AI saves the playlist as a private playlist of the account it logs in with, and Music Assistant can only open playlists its own account can see. Navidrome playlists are saved as public, so different accounts are fine there.
-
 A playlist made a moment ago plays straight away. The integration asks Music Assistant for it by its music-server ID, so it doesn't wait for a Music Assistant library sync.
 
 ## Troubleshooting
@@ -161,7 +159,6 @@ A playlist made a moment ago plays straight away. The integration asks Music Ass
 | **"AudioMuse-AI isn't ready for this yet"** | AudioMuse-AI is still building its search indexes after analysis. Similar artists and searches work once its first analysis batch has finished. |
 | **"AudioMuse-AI rejected the request"** | Authentication is enabled in AudioMuse-AI. Enter its API token, or update it if it changed (Home Assistant will ask you to). |
 | **No "Save & play" button** | Install the Music Assistant integration, with your music server as a provider. Lyrion servers can't be played through Music Assistant. |
-| **Playback fails on Jellyfin or Emby with "not found"** | AudioMuse-AI and Music Assistant are logged in to the server as different accounts. Use the same account in both. See [Music servers](#music-servers). |
 | **Playback fails on Jellyfin, Emby or Plex** | Set **Music Assistant provider** in the options to your provider's instance ID, and please open an issue. |
 | **AI pick returns odd songs or errors** | Use a model that supports tool calling. |
 
