@@ -63,21 +63,25 @@ Lyrics Search and the Lyrics path need lyrics analysis turned on in AudioMuse-AI
 
 ## Installation
 
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=colfin22&repository=ha-audiomuse&category=integration)
+
 ### Marketplace (Home Assistant 2026.11 and newer)
 
 The Marketplace replaced HACS in Home Assistant 2026.11.
 
-1. Go to **Settings → Marketplace**.
-2. In the upper-right corner, select **Add from link**, enter `https://github.com/colfin22/ha-audiomuse` and select **Add**. The Marketplace asks you to connect GitHub the first time.
-3. Find **AudioMuse-AI** in the Marketplace, select **Download**, then restart Home Assistant.
+1. Select the button above. Your Home Assistant opens the Marketplace and asks to add `https://github.com/colfin22/ha-audiomuse` as a custom repository; accept it. The first time, it asks you to connect GitHub.
+2. Find **AudioMuse-AI** in the Marketplace, select **Download**, then restart Home Assistant.
+
+Without the button: go to **Settings → Marketplace**, select **Add from link** in the upper-right corner, enter `https://github.com/colfin22/ha-audiomuse` and select **Add**.
 
 ### Home Assistant 2026.10 and older (HACS)
 
-Before 2026.11 there is no Marketplace; use HACS instead.
+Before 2026.11 there is no Marketplace, so use HACS.
 
-1. In HACS, open the ⋮ menu → **Custom repositories**.
-2. Add `https://github.com/colfin22/ha-audiomuse` with the type **Integration**.
-3. Find **AudioMuse-AI** in HACS, select **Download**, then restart Home Assistant.
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=colfin22&repository=ha-audiomuse&category=integration)
+
+1. In HACS, go to **Integrations** and search for **AudioMuse-AI**.
+2. Select **Download**, then restart Home Assistant.
 
 ### Manual
 
