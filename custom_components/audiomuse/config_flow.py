@@ -33,6 +33,7 @@ from .const import (
     CONF_AI_SERVER_URL,
     CONF_DEFAULT_COUNT,
     CONF_DEFAULT_PLAYER,
+    CONF_MA_ADD_TO_LIBRARY,
     CONF_MA_PROVIDER,
     DEFAULT_COUNT,
     DOMAIN,
@@ -192,6 +193,9 @@ class AudioMuseOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_MA_PROVIDER, description={"suggested_value": opts.get(CONF_MA_PROVIDER)}
                 ): str,
+                vol.Required(
+                    CONF_MA_ADD_TO_LIBRARY, default=opts.get(CONF_MA_ADD_TO_LIBRARY, True)
+                ): selector.BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -89,7 +89,18 @@ async def test_options_flow_drops_empty_values(hass):
         result["flow_id"], {CONF_DEFAULT_COUNT: 30, CONF_AI_MODEL: ""}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_DEFAULT_COUNT: 30}
+    assert entry.options == {CONF_DEFAULT_COUNT: 30, "add_to_music_assistant_library": True}
+
+
+async def test_options_flow_keeps_library_add_switched_off(hass):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=URL.lower(), data={CONF_URL: URL, CONF_API_TOKEN: TOKEN})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_DEFAULT_COUNT: 25, "add_to_music_assistant_library": False}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["add_to_music_assistant_library"] is False
 
 
 async def test_user_flow_without_token(hass):

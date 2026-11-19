@@ -157,6 +157,8 @@ Everything except playback works with every music server AudioMuse-AI supports. 
 
 A playlist made a moment ago plays straight away. The integration asks Music Assistant for it by its music-server ID, so it doesn't wait for a Music Assistant library sync.
 
+New playlists are also added to Music Assistant's library as soon as they're saved, so they show in its Playlists list without waiting for its next library sync. To stop that, turn off **Add new playlists to Music Assistant's library** in this integration's options.
+
 ## Troubleshooting
 
 | You see | What to do |
@@ -167,6 +169,7 @@ A playlist made a moment ago plays straight away. The integration asks Music Ass
 | **No "Save & play" button** | Install the Music Assistant integration, with your music server as a provider. Lyrion servers can't be played through Music Assistant. |
 | **Playback fails on Emby (or Jellyfin before 10.9) with "not found"** | AudioMuse-AI and Music Assistant are logged in to the server as different accounts. Use the same account in both. See [Music servers](#music-servers). |
 | **Playback fails on Jellyfin, Emby or Plex** | Set **Music Assistant provider** in the options to your provider's instance ID, and please open an issue. |
+| **Music Assistant logs "Exception in task … MusicProvider.library_add" after a save** | Harmless. Music Assistant also tries to add the playlist on the music server itself, and logs this when its provider can't do that for playlists (seen with Navidrome). The playlist is still added to Music Assistant's library. |
 | **AI pick returns odd songs or errors** | Use a model that supports tool calling. |
 
 ## How this relates to Music Assistant's AudioMuse-AI plugin

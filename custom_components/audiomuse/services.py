@@ -6,6 +6,7 @@ AudioMuse page can all use the same calls.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +40,7 @@ from .const import (
     CONF_AI_SERVER_URL,
     CONF_DEFAULT_COUNT,
     CONF_DEFAULT_PLAYER,
+    CONF_MA_ADD_TO_LIBRARY,
     CONF_MA_PROVIDER,
     DEFAULT_COUNT,
     DOMAIN,
@@ -304,6 +306,12 @@ async def async_save_and_play(
             detail=detail,
             track_count=len(item_ids),
         )
+    if saved.playlist_id and entry.options.get(CONF_MA_ADD_TO_LIBRARY, True):
+        entry.async_create_task(
+            hass,
+            async_add_to_music_assistant_library(hass, entry, saved.playlist_id),
+            "audiomuse_ma_add_to_library",
+        )
     if play_on:
         if not saved.playlist_id:
             raise HomeAssistantError(
@@ -337,6 +345,39 @@ async def async_play_playlist(
             "enqueue": "replace",
         },
         blocking=True,
+    )
+
+
+async def async_add_to_music_assistant_library(
+    hass: HomeAssistant, entry: AudioMuseConfigEntry, playlist_id: str
+) -> None:
+    """Add a new music-server playlist to Music Assistant's library, so it is listed there.
+
+    Uses the Music Assistant integration's own connection ("music/library/add_item",
+    which needs only library.write). Best effort: a failure is logged and never
+    affects saving or playback.
+    """
+    ma_entries = [
+        e
+        for e in hass.config_entries.async_entries(MUSIC_ASSISTANT_DOMAIN)
+        if e.state is ConfigEntryState.LOADED
+    ]
+    mass = getattr(getattr(ma_entries[0], "runtime_data", None), "mass", None) if ma_entries else None
+    if mass is None:
+        return
+    media_id = music_assistant_media_id(entry, playlist_id)
+    if not media_id:
+        return
+    try:
+        async with asyncio.timeout(30):
+            item = await mass.music.add_item_to_library(media_id)
+    except Exception as err:  # noqa: BLE001 - best effort, any failure is only logged
+        _LOGGER.warning("Could not add %s to Music Assistant's library: %s", media_id, err)
+        return
+    _LOGGER.info(
+        "Added %s to Music Assistant's library (library id %s)",
+        media_id,
+        getattr(item, "item_id", None),
     )
 
 
