@@ -156,3 +156,70 @@ async def test_two_servers_need_an_entry_id(hass, mock_client):
         await hass.services.async_call(
             DOMAIN, "similar_artists", {"artist": "Alice"}, blocking=True, return_response=True
         )
+
+
+@pytest.fixture
+def music_assistant(hass):
+    """Make a loaded Music Assistant entry; marked not loaded again so teardown skips its unload."""
+    made = []
+
+    def make(add_item):
+        made.append(_loaded_music_assistant(hass, add_item))
+
+    yield make
+    for ma in made:
+        ma.mock_state(hass, ConfigEntryState.NOT_LOADED)
+
+
+def _loaded_music_assistant(hass, add_item):
+    """A loaded Music Assistant entry whose client records add_item_to_library calls."""
+    from types import SimpleNamespace
+
+    ma = MockConfigEntry(domain="music_assistant", state=ConfigEntryState.LOADED)
+    ma.add_to_hass(hass)
+    ma.runtime_data = SimpleNamespace(mass=SimpleNamespace(music=SimpleNamespace(add_item_to_library=add_item)))
+    return ma
+
+
+async def test_saved_playlist_is_added_to_music_assistant_library(hass, mock_client, music_assistant):
+    await _setup(hass)
+    add_item = AsyncMock(return_value=None)
+    music_assistant(add_item)
+    play = async_mock_service(hass, "music_assistant", "play_media")
+    await hass.services.async_call(
+        DOMAIN,
+        "instant_playlist",
+        {"prompt": "rainy day songs", "count": 10, "play_on": "media_player.kitchen"},
+        blocking=True,
+        return_response=True,
+    )
+    await hass.async_block_till_done()
+    add_item.assert_awaited_once_with("opensubsonic://playlist/pl1")
+    assert len(play) == 1
+
+
+async def test_failed_library_add_does_not_stop_save_or_play(hass, mock_client, music_assistant, caplog):
+    await _setup(hass)
+    add_item = AsyncMock(side_effect=RuntimeError("not allowed"))
+    music_assistant(add_item)
+    play = async_mock_service(hass, "music_assistant", "play_media")
+    resp = await hass.services.async_call(
+        DOMAIN,
+        "instant_playlist",
+        {"prompt": "rainy day songs", "count": 10, "play_on": "media_player.kitchen"},
+        blocking=True,
+        return_response=True,
+    )
+    await hass.async_block_till_done()
+    assert resp["playlist_id"] == "pl1" and resp["played_on"] == "media_player.kitchen"
+    assert len(play) == 1
+    assert "Could not add opensubsonic://playlist/pl1 to Music Assistant's library: not allowed" in caplog.text
+
+
+async def test_no_music_assistant_means_no_library_add(hass, mock_client):
+    await _setup(hass)
+    resp = await hass.services.async_call(
+        DOMAIN, "instant_playlist", {"prompt": "x"}, blocking=True, return_response=True
+    )
+    await hass.async_block_till_done()
+    assert resp["playlist_id"] == "pl1"
