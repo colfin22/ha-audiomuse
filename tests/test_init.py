@@ -223,3 +223,17 @@ async def test_no_music_assistant_means_no_library_add(hass, mock_client):
     )
     await hass.async_block_till_done()
     assert resp["playlist_id"] == "pl1"
+
+
+async def test_library_add_can_be_turned_off(hass, mock_client, music_assistant):
+    from custom_components.audiomuse.const import CONF_MA_ADD_TO_LIBRARY
+
+    await _setup(hass, options={CONF_MA_ADD_TO_LIBRARY: False})
+    add_item = AsyncMock(return_value=None)
+    music_assistant(add_item)
+    resp = await hass.services.async_call(
+        DOMAIN, "instant_playlist", {"prompt": "x"}, blocking=True, return_response=True
+    )
+    await hass.async_block_till_done()
+    assert resp["playlist_id"] == "pl1"
+    add_item.assert_not_awaited()

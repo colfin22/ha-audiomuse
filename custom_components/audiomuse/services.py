@@ -40,6 +40,7 @@ from .const import (
     CONF_AI_SERVER_URL,
     CONF_DEFAULT_COUNT,
     CONF_DEFAULT_PLAYER,
+    CONF_MA_ADD_TO_LIBRARY,
     CONF_MA_PROVIDER,
     DEFAULT_COUNT,
     DOMAIN,
@@ -305,7 +306,7 @@ async def async_save_and_play(
             detail=detail,
             track_count=len(item_ids),
         )
-    if saved.playlist_id:
+    if saved.playlist_id and entry.options.get(CONF_MA_ADD_TO_LIBRARY, True):
         entry.async_create_task(
             hass,
             async_add_to_music_assistant_library(hass, entry, saved.playlist_id),

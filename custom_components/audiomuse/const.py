@@ -14,6 +14,7 @@ CONF_AI_MODEL: Final = "ai_model"
 CONF_AI_SERVER_URL: Final = "ai_server_url"
 CONF_DEFAULT_PLAYER: Final = "default_player"
 CONF_MA_PROVIDER: Final = "music_assistant_provider"
+CONF_MA_ADD_TO_LIBRARY: Final = "add_to_music_assistant_library"
 
 DEFAULT_COUNT: Final = 25
 MIN_COUNT: Final = 5

@@ -42,7 +42,8 @@
           "ai_provider": "AI provider for Instant Playlist",
           "ai_model": "AI model for Instant Playlist",
           "ai_server_url": "AI server URL (OpenAI-compatible)",
-          "music_assistant_provider": "Music Assistant provider"
+          "music_assistant_provider": "Music Assistant provider",
+          "add_to_music_assistant_library": "Add new playlists to Music Assistant's library"
         },
         "data_description": {
           "default_count": "Used when an action does not give a song count.",
@@ -50,7 +51,8 @@
           "ai_provider": "Leave empty to use the provider set in AudioMuse-AI.",
           "ai_model": "Leave empty to use the model set in AudioMuse-AI. Pick a model that supports tool calling.",
           "ai_server_url": "Only for OpenAI-compatible services. Leave empty to use AudioMuse-AI's setting.",
-          "music_assistant_provider": "Only needed if playback fails or you have several Music Assistant providers for the same server type: the Music Assistant provider instance ID. Navidrome, Jellyfin, Emby and Plex are detected automatically."
+          "music_assistant_provider": "Only needed if playback fails or you have several Music Assistant providers for the same server type: the Music Assistant provider instance ID. Navidrome, Jellyfin, Emby and Plex are detected automatically.",
+          "add_to_music_assistant_library": "Lists each saved playlist in Music Assistant straight away, without waiting for its library sync."
         }
       }
     }
