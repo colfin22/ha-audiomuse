@@ -1,14 +1,22 @@
+<div align="center">
+
+<img width="1366" height="960" alt="The AudioMuse page in Home Assistant" src="https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-desktop.png" />
+
 # AudioMuse-AI for Home Assistant
 
 [![Release](https://img.shields.io/github/v/release/colfin22/ha-audiomuse)](https://github.com/colfin22/ha-audiomuse/releases/latest)
 [![Validate](https://github.com/colfin22/ha-audiomuse/actions/workflows/validate.yml/badge.svg)](https://github.com/colfin22/ha-audiomuse/actions/workflows/validate.yml)
 [![Tests](https://github.com/colfin22/ha-audiomuse/actions/workflows/tests.yml/badge.svg)](https://github.com/colfin22/ha-audiomuse/actions/workflows/tests.yml)
 
+**[Install](#installation)** · **[Features](#features)** · **[Latest release](https://github.com/colfin22/ha-audiomuse/releases/latest)** · **[Report an issue](https://github.com/colfin22/ha-audiomuse/issues)**
+
+</div>
+
+---
+
 A Home Assistant integration for [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI), the self-hosted sonic-analysis engine for your music library. It adds an **AudioMuse** page to the Home Assistant sidebar for making playlists from your own music. Playlists are saved to your music server, so they show up in every music app, and can be played straight away on your speakers through [Music Assistant](https://www.music-assistant.io/).
 
 This is a community integration, not an official AudioMuse-AI project.
-
-![The AudioMuse page](https://raw.githubusercontent.com/colfin22/ha-audiomuse/main/docs/images/page-desktop.png)
 
 ## Features
 
